@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: intel-worker
+  namespace: intel-ingestion
+  labels:
+    app: intel-worker
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+spec:
+  selector:
+    app: intel-worker
+  ports:
+  - name: metrics
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP
+  sessionAffinity: None
