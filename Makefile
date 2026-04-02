@@ -92,15 +92,15 @@ lgtm-delete: ## Delete LGTM stack
 grafana: ## Port-forward to Grafana
 	@echo "Accessing Grafana at http://localhost:3000"
 	@echo "Username: admin / Password: admin"
-	kubectl port-forward -n monitoring svc/grafana 3000:3000
+	minikube kubectl -- port-forward -n monitoring svc/grafana 3000:3000
 
 loki: ## Port-forward to Loki
 	@echo "Accessing Loki at http://localhost:3100"
-	kubectl port-forward -n monitoring svc/loki 3100:3100
+	minikube kubectl -- port-forward -n monitoring svc/loki 3100:3100
 
 tempo: ## Port-forward to Tempo
 	@echo "Accessing Tempo at http://localhost:3200"
-	kubectl port-forward -n monitoring svc/tempo 3200:3200
+	minikube kubectl -- port-forward -n monitoring svc/tempo 3200:3200
 
 full-deploy: minikube-start build-minikube tf-apply k8s-apply lgtm-deploy ## Complete deployment with LGTM stack
 	@echo ""

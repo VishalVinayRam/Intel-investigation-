@@ -127,21 +127,22 @@ data:
 
     scrape_configs:
     - job_name: kubernetes-pods
-      kubernetes_sd_configs:
-      - role: pod
-        namespaces:
-          names:
-          - intel-ingestion
-      relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_label_app]
-        target_label: app
-      - source_labels: [__meta_kubernetes_pod_name]
-        target_label: pod
-      - source_labels: [__meta_kubernetes_namespace]
-        target_label: namespace
-      - source_labels: [__meta_kubernetes_pod_container_name]
-        target_label: container
+      static_configs:
+      - targets:
+        - localhost
+        labels:
+          job: kubernetes-pods
+          __path__: /var/log/pods/*/*/*.log
       pipeline_stages:
+      - match:
+          selector: '{job="kubernetes-pods"}'
+          stages:
+          - regex:
+              expression: ^/var/log/pods/(?P<namespace>[a-zA-Z0-9_-]+)_(?P<app>[a-zA-Z0-9_-]+)-[a-z0-9A-Z]+-[a-z0-9A-Z]+_[a-f0-9-]+/.*\.log$
+              source: filename
+          - labels:
+              namespace:
+              app:
       - json:
           expressions:
             timestamp: timestamp
@@ -280,12 +281,6 @@ data:
               endpoint: 0.0.0.0:4317
         opencensus:
 
-    ingester:
-      max_block_duration: 5m
-
-    compactor:
-      compaction:
-        block_retention: 1h
 
     metrics_generator:
       ring:
@@ -520,6 +515,10 @@ data:
       - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
         regex: 'true'
         action: keep
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
       - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
         target_label: __metrics_path__
         regex: (.+)
