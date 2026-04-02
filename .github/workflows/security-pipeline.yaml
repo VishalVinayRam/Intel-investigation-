@@ -85,6 +85,7 @@ jobs:
         format: 'sarif'
         output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH,MEDIUM'
+        trivyignores: '.trivyignore'
 
     - name: Run Trivy vulnerability scanner (table output)
       uses: aquasecurity/trivy-action@master
@@ -93,6 +94,7 @@ jobs:
         scan-ref: 'app/'
         format: 'table'
         severity: 'CRITICAL,HIGH,MEDIUM'
+        trivyignores: '.trivyignore'
 
     - name: Upload Trivy results to GitHub Security
       uses: github/codeql-action/upload-sarif@v3
@@ -134,6 +136,7 @@ jobs:
         format: 'sarif'
         output: 'trivy-image-results.sarif'
         severity: 'CRITICAL,HIGH'
+        trivyignores: '.trivyignore'
 
     - name: Run Trivy vulnerability scanner on image (table)
       uses: aquasecurity/trivy-action@master
@@ -142,6 +145,7 @@ jobs:
         format: 'table'
         severity: 'CRITICAL,HIGH'
         exit-code: '1'  # Fail if critical vulnerabilities found
+        trivyignores: '.trivyignore'
 
     - name: Upload Trivy image results
       uses: github/codeql-action/upload-sarif@v3

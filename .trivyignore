@@ -1,0 +1,11 @@
+# Trivy Ignore File
+# Add CVE IDs (e.g., CVE-2023-12345) or GHSA IDs here to explicitly ignore false positives
+# or accepted risks during the SCA scan.
+# Each ID should be on its own line.
+#
+# Examples:
+# CVE-2023-1048
+# GHSA-45vw-3x8f-8rgw
+
+# Example (Uncomment to use):
+# CVE-0000-0000
