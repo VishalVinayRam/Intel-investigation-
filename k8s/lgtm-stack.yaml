@@ -42,6 +42,17 @@ data:
             prefix: index_
             period: 24h
 
+    ruler:
+      storage:
+        type: local
+        local:
+          directory: /etc/loki/rules
+      rule_path: /tmp/loki/scratch
+      ring:
+        kvstore:
+          store: inmemory
+      enable_api: true
+
     limits_config:
       enforce_metric_name: false
       reject_old_samples: true
@@ -78,6 +89,8 @@ spec:
           mountPath: /etc/loki
         - name: storage
           mountPath: /loki
+        - name: rules
+          mountPath: /etc/loki/rules/fake
         resources:
           requests:
             cpu: 100m
@@ -91,6 +104,9 @@ spec:
           name: loki-config
       - name: storage
         emptyDir: {}
+      - name: rules
+        configMap:
+          name: loki-alerts
 
 ---
 apiVersion: v1
@@ -405,7 +421,13 @@ data:
     ruler_storage:
       backend: filesystem
       filesystem:
-        dir: /data/rules
+        dir: /etc/mimir/rules
+
+    ruler:
+      rule_path: /tmp/mimir/rules-scratch
+      ring:
+        kvstore:
+          store: inmemory
 
     limits:
       ingestion_rate: 10000
@@ -442,6 +464,8 @@ spec:
           mountPath: /etc/mimir
         - name: storage
           mountPath: /data
+        - name: rules
+          mountPath: /etc/mimir/rules/anonymous
         resources:
           requests:
             cpu: 100m
@@ -455,6 +479,9 @@ spec:
           name: mimir-config
       - name: storage
         emptyDir: {}
+      - name: rules
+        configMap:
+          name: mimir-alerts
 
 ---
 apiVersion: v1
@@ -644,6 +671,8 @@ data:
       url: http://loki:3100
       isDefault: false
       editable: true
+      jsonData:
+        manageAlerts: true
 
     - name: Tempo
       type: tempo
@@ -660,6 +689,8 @@ data:
       editable: true
       jsonData:
         timeInterval: "15s"
+        manageAlerts: true
+        prometheusType: Mimir
 
 ---
 apiVersion: apps/v1

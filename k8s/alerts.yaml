@@ -1,0 +1,50 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-alerts
+  namespace: monitoring
+data:
+  alerts.yaml: |
+    groups:
+      - name: intel-worker-logs
+        rules:
+          - alert: HighErrorRate
+            expr: |
+              sum(rate({app="intel-worker", level="ERROR"}[5m])) > 1
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High Error Rate in Intel Worker Logs"
+              description: "The Intel Worker app is experiencing an elevated error rate (>1 error/sec over 5m)."
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mimir-alerts
+  namespace: monitoring
+data:
+  alerts.yaml: |
+    groups:
+      - name: intel-worker-metrics
+        rules:
+          - alert: ThreatFeedFailures
+            expr: |
+              rate(external_api_errors_count_total[5m]) > 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Threat Feed API Failures"
+              description: "Worker is encountering errors while fetching threat feeds."
+          - alert: HighErrorRatio
+            expr: |
+              sum(rate(external_api_errors_count_total[5m])) / (sum(rate(threat_indicators_processed_total[5m])) + sum(rate(external_api_errors_count_total[5m]))) > 0.1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High Threat Ingestion Error Ratio"
+              description: "More than 10% of threat feed fetch attempts are failing."
