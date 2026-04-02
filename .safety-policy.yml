@@ -1,8 +1,0 @@
----
-security:
-  ignore-cvss-severity-below: 0
-  ignore-vulnerabilities:
-    # Example format to ignore specific vulnerable dependency CVEs/IDs:
-    # 70612:
-    #   reason: "False positive, not using the vulnerable function"
-    #   expires: "2026-12-31"

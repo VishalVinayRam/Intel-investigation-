@@ -33,7 +33,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install bandit[toml] safety
+        pip install bandit[toml] pip-audit
 
     - name: Run Bandit SAST scan
       run: |
@@ -52,11 +52,11 @@ jobs:
           echo "No hardcoded secrets detected."
         fi
 
-    - name: Run Safety check for vulnerable dependencies
+    - name: Run pip-audit for vulnerable dependencies
       run: |
         echo "Checking for vulnerable dependencies..."
-        safety scan --file=app/requirements.txt --policy-file=.safety-policy.yml --json > safety-report.json || true
-        safety scan --file=app/requirements.txt --policy-file=.safety-policy.yml
+        pip-audit -r app/requirements.txt --format json -o pip-audit-report.json || true
+        pip-audit -r app/requirements.txt
 
     - name: Upload Security Scan Results
       uses: actions/upload-artifact@v4
@@ -65,7 +65,7 @@ jobs:
         name: sast-results
         path: |
           bandit-report.json
-          safety-report.json
+          pip-audit-report.json
 
   # Job 2: Software Composition Analysis (SCA) with Trivy
   sca-scan:
@@ -99,7 +99,7 @@ jobs:
         trivyignores: '.trivyignore'
 
     - name: Upload Trivy results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
@@ -150,7 +150,7 @@ jobs:
         trivyignores: '.trivyignore'
 
     - name: Upload Trivy image results
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       if: always()
       with:
         sarif_file: 'trivy-image-results.sarif'
