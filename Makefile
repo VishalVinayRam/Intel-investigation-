@@ -75,7 +75,10 @@ kyverno-deploy: ## Deploy Kyverno Admission Controller and policies
 	@echo "Waiting for Kyverno to become ready..."
 	minikube kubectl -- wait --for=condition=ready pod -l app.kubernetes.io/name=kyverno -n kyverno --timeout=300s || true
 	@echo "Applying Kyverno ClusterPolicies..."
-	minikube kubectl -- apply -k k8s/ || minikube kubectl -- apply -f k8s/kyverno-policies.yaml
+	minikube kubectl -- apply -f k8s/kyverno-policies.yaml
+	@echo "Patching Kyverno cleanup jobs Image..."
+	minikube kubectl -- patch cronjob kyverno-cleanup-admission-reports -n kyverno --type='json' -p='[{"op": "replace", "path": "/spec/jobTemplate/spec/template/spec/containers/0/image", "value":"bitnami/kubectl:latest"}]'
+	minikube kubectl -- patch cronjob kyverno-cleanup-cluster-admission-reports -n kyverno --type='json' -p='[{"op": "replace", "path": "/spec/jobTemplate/spec/template/spec/containers/0/image", "value":"bitnami/kubectl:latest"}]'
 	@echo "Kyverno successfully deployed!"
 
 # LGTM Stack (Loki, Grafana, Tempo, Mimir)

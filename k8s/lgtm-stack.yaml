@@ -280,6 +280,9 @@ data:
         duration_slo: 5s
 
     distributor:
+      ring:
+        kvstore:
+          store: inmemory
       receivers:
         jaeger:
           protocols:
@@ -310,6 +313,12 @@ data:
           path: /tmp/tempo/wal
         local:
           path: /tmp/tempo/blocks
+
+    overrides:
+      defaults:
+        ingestion:
+          max_traces_per_user: 10000
+
 
 ---
 apiVersion: apps/v1

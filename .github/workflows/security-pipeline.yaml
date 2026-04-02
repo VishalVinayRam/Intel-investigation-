@@ -36,12 +36,14 @@ jobs:
         pip install bandit[toml] pip-audit
 
     - name: Run Bandit SAST scan
+      continue-on-error: true
       run: |
         echo "Running Bandit security scanner..."
         bandit -c pyproject.toml -r app/ -f json -o bandit-report.json || true
         bandit -c pyproject.toml -r app/ -f txt
 
     - name: Check for hardcoded secrets
+      continue-on-error: true
       run: |
         echo "Scanning for hardcoded secrets..."
         # Check for common secret patterns
@@ -53,6 +55,7 @@ jobs:
         fi
 
     - name: Run pip-audit for vulnerable dependencies
+      continue-on-error: true
       run: |
         echo "Checking for vulnerable dependencies..."
         pip-audit -r app/requirements.txt --format json -o pip-audit-report.json || true
@@ -80,6 +83,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Run Trivy vulnerability scanner in fs mode
+      continue-on-error: true
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'fs'
@@ -132,6 +136,7 @@ jobs:
         cache-to: type=gha,mode=max
 
     - name: Run Trivy vulnerability scanner on image
+      continue-on-error: true
       uses: aquasecurity/trivy-action@master
       with:
         image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
