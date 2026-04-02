@@ -55,15 +55,17 @@ jobs:
     - name: Run Safety check for vulnerable dependencies
       run: |
         echo "Checking for vulnerable dependencies..."
-        safety check --file=app/requirements.txt --json || true
-        safety check --file=app/requirements.txt
+        safety check --file=app/requirements.txt --policy-file=.safety-policy.yml --json > safety-report.json || true
+        safety check --file=app/requirements.txt --policy-file=.safety-policy.yml
 
-    - name: Upload Bandit results
+    - name: Upload Security Scan Results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: bandit-results
-        path: bandit-report.json
+        name: sast-results
+        path: |
+          bandit-report.json
+          safety-report.json
 
   # Job 2: Software Composition Analysis (SCA) with Trivy
   sca-scan:
