@@ -1,0 +1,210 @@
+{
+  "dashboard": {
+    "title": "Threat Intelligence Monitoring",
+    "uid": "threat-intel",
+    "timezone": "utc",
+    "schemaVersion": 16,
+    "version": 0,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Threat Indicators Processed (Total)",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(threat_indicators_processed_total[5m]))",
+            "refId": "A",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 6,
+          "x": 0,
+          "y": 0
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops",
+            "decimals": 2
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Indicators by Source",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(threat_indicators_processed_total[5m])",
+            "refId": "A",
+            "legendFormat": "{{source}} - {{type}}",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 6,
+          "y": 0
+        }
+      },
+      {
+        "id": 3,
+        "title": "API Errors by Source",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(external_api_errors_count_total[5m])",
+            "refId": "A",
+            "legendFormat": "{{source}} - {{error_type}}",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        }
+      },
+      {
+        "id": 4,
+        "title": "Feed Freshness",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "time() - threat_feed_last_success_timestamp",
+            "refId": "A",
+            "legendFormat": "{{source}}",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 6,
+          "x": 12,
+          "y": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 600, "color": "yellow"},
+                {"value": 1800, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Worker Logs",
+        "type": "logs",
+        "targets": [
+          {
+            "expr": "{namespace=\"intel-ingestion\", app=\"intel-worker\"}",
+            "refId": "A",
+            "datasource": "Loki"
+          }
+        ],
+        "gridPos": {
+          "h": 10,
+          "w": 24,
+          "x": 0,
+          "y": 16
+        }
+      },
+      {
+        "id": 6,
+        "title": "Trace Duration by Operation",
+        "type": "timeseries",
+        "targets": [
+          {
+            "query": "{service.name=\"intel-worker\"}",
+            "refId": "A",
+            "queryType": "traceql",
+            "datasource": "Tempo"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 26
+        }
+      },
+      {
+        "id": 7,
+        "title": "Error Rate",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "sum(rate(external_api_errors_count_total[5m])) / (sum(rate(threat_indicators_processed_total[5m])) + sum(rate(external_api_errors_count_total[5m])))",
+            "refId": "A",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 18,
+          "y": 0
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 0.05, "color": "yellow"},
+                {"value": 0.1, "color": "red"}
+              ]
+            },
+            "max": 1,
+            "min": 0
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "Top Error Messages (Logs)",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "topk(10, count_over_time({namespace=\"intel-ingestion\", level=\"ERROR\"}[1h]))",
+            "refId": "A",
+            "datasource": "Loki"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 26
+        }
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus"
+        }
+      ]
+    },
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": ["10s", "30s", "1m", "5m"]
+    }
+  }
+}

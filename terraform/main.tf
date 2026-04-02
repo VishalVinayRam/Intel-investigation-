@@ -263,10 +263,12 @@ resource "kubernetes_config_map" "worker_config" {
   }
 
   data = {
-    REDIS_HOST     = "redis"
-    REDIS_PORT     = "6379"
-    FETCH_INTERVAL = "300"  # 5 minutes
-    METRICS_PORT   = "8000"
-    LOG_LEVEL      = "INFO"
+    REDIS_HOST      = "redis"
+    REDIS_PORT      = "6379"
+    FETCH_INTERVAL  = "300"  # 5 minutes
+    METRICS_PORT    = "8000"
+    LOG_LEVEL       = "INFO"
+    TEMPO_ENDPOINT  = "tempo.monitoring.svc.cluster.local:4317"
+    ENVIRONMENT     = "poc"
   }
 }

@@ -7,6 +7,7 @@ Fetches threat indicators from external feeds and processes them via Redis queue
 import os
 import time
 import logging
+import logging.config
 import requests
 import json
 from datetime import datetime
@@ -14,13 +15,88 @@ from typing import Dict, List, Any
 import redis
 from prometheus_client import Counter, Gauge, start_http_server, generate_latest
 from flask import Flask, Response
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
+from opentelemetry.instrumentation.redis import RedisInstrumentor
+
+# Configure structured JSON logging for Loki
+class JSONFormatter(logging.Formatter):
+    """JSON formatter for structured logging compatible with Loki"""
+    def format(self, record):
+        log_data = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'level': record.levelname,
+            'logger': record.name,
+            'message': record.getMessage(),
+            'module': record.module,
+            'function': record.funcName,
+            'line': record.lineno,
+        }
+
+        # Add extra fields if present
+        if hasattr(record, 'source'):
+            log_data['source'] = record.source
+        if hasattr(record, 'count'):
+            log_data['count'] = record.count
+        if hasattr(record, 'duration_ms'):
+            log_data['duration_ms'] = record.duration_ms
+        if hasattr(record, 'error_type'):
+            log_data['error_type'] = record.error_type
+
+        # Add exception info if present
+        if record.exc_info:
+            log_data['exception'] = self.formatException(record.exc_info)
+
+        return json.dumps(log_data)
 
 # Configure logging
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    handlers=[handler]
 )
 logger = logging.getLogger(__name__)
+
+# Configure OpenTelemetry for Tempo tracing
+def setup_tracing():
+    """Setup OpenTelemetry tracing for Tempo"""
+    tempo_endpoint = os.getenv('TEMPO_ENDPOINT', 'tempo:4317')
+
+    if tempo_endpoint:
+        resource = Resource.create({
+            "service.name": "intel-worker",
+            "service.version": "1.0.0",
+            "deployment.environment": os.getenv('ENVIRONMENT', 'poc')
+        })
+
+        provider = TracerProvider(resource=resource)
+
+        # OTLP exporter for Tempo
+        otlp_exporter = OTLPSpanExporter(
+            endpoint=tempo_endpoint,
+            insecure=True  # For POC; use TLS in production
+        )
+
+        provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+        trace.set_tracer_provider(provider)
+
+        # Auto-instrument requests and redis
+        RequestsInstrumentor().instrument()
+        RedisInstrumentor().instrument()
+
+        logger.info("OpenTelemetry tracing configured", extra={'tempo_endpoint': tempo_endpoint})
+    else:
+        logger.info("Tempo endpoint not configured, skipping tracing setup")
+
+    return trace.get_tracer(__name__)
+
+# Initialize tracer
+tracer = setup_tracing()
 
 # Prometheus metrics
 threat_indicators_processed = Counter(
@@ -96,50 +172,66 @@ class ThreatIntelWorker:
         Public feed - no API key required
         """
         source = 'urlhaus'
-        try:
-            url = 'https://urlhaus.abuse.ch/downloads/csv_recent/'
-            logger.info(f"Fetching threat feed from {source}")
+        with tracer.start_as_current_span(f"fetch_{source}_feed") as span:
+            span.set_attribute("feed.source", source)
+            start_time = time.time()
 
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
+            try:
+                url = 'https://urlhaus.abuse.ch/downloads/csv_recent/'
+                logger.info("Fetching threat feed", extra={'source': source, 'url': url})
 
-            # Parse CSV (skip comments)
-            indicators = []
-            lines = response.text.split('\n')
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
 
-            for line in lines:
-                if line.startswith('#') or not line.strip():
-                    continue
+                # Parse CSV (skip comments)
+                indicators = []
+                lines = response.text.split('\n')
 
-                try:
-                    parts = line.split(',')
-                    if len(parts) >= 7:
-                        indicator = {
-                            'id': parts[0].strip('"'),
-                            'url': parts[2].strip('"'),
-                            'threat': parts[4].strip('"'),
-                            'tags': parts[5].strip('"'),
-                            'source': source,
-                            'timestamp': datetime.utcnow().isoformat(),
-                            'type': 'malicious_url'
-                        }
-                        indicators.append(indicator)
-                except Exception as e:
-                    logger.debug(f"Skipping malformed line: {e}")
-                    continue
+                for line in lines:
+                    if line.startswith('#') or not line.strip():
+                        continue
 
-            feed_last_success.labels(source=source).set(time.time())
-            logger.info(f"Fetched {len(indicators)} indicators from {source}")
-            return indicators[:100]  # Limit to first 100 for POC
+                    try:
+                        parts = line.split(',')
+                        if len(parts) >= 7:
+                            indicator = {
+                                'id': parts[0].strip('"'),
+                                'url': parts[2].strip('"'),
+                                'threat': parts[4].strip('"'),
+                                'tags': parts[5].strip('"'),
+                                'source': source,
+                                'timestamp': datetime.utcnow().isoformat(),
+                                'type': 'malicious_url'
+                            }
+                            indicators.append(indicator)
+                    except Exception as e:
+                        logger.debug(f"Skipping malformed line: {e}")
+                        continue
 
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch {source} feed: {e}")
-            external_api_errors.labels(source=source, error_type='request_failed').inc()
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error fetching {source}: {e}")
-            external_api_errors.labels(source=source, error_type='parse_error').inc()
-            return []
+                duration_ms = (time.time() - start_time) * 1000
+                feed_last_success.labels(source=source).set(time.time())
+                span.set_attribute("feed.indicators_count", len(indicators))
+                span.set_attribute("feed.duration_ms", duration_ms)
+
+                logger.info("Feed fetch successful", extra={
+                    'source': source,
+                    'count': len(indicators),
+                    'duration_ms': duration_ms
+                })
+                return indicators[:100]  # Limit to first 100 for POC
+
+            except requests.RequestException as e:
+                span.record_exception(e)
+                span.set_attribute("error", True)
+                logger.error("Failed to fetch feed", extra={'source': source, 'error_type': 'request_failed'}, exc_info=True)
+                external_api_errors.labels(source=source, error_type='request_failed').inc()
+                return []
+            except Exception as e:
+                span.record_exception(e)
+                span.set_attribute("error", True)
+                logger.error("Unexpected error fetching feed", extra={'source': source, 'error_type': 'parse_error'}, exc_info=True)
+                external_api_errors.labels(source=source, error_type='parse_error').inc()
+                return []
 
     def fetch_threatfox_feed(self) -> List[Dict[str, Any]]:
         """
@@ -147,47 +239,63 @@ class ThreatIntelWorker:
         Public feed - no API key required
         """
         source = 'threatfox'
-        try:
-            url = 'https://threatfox.abuse.ch/downloads/hostfile/'
-            logger.info(f"Fetching threat feed from {source}")
+        with tracer.start_as_current_span(f"fetch_{source}_feed") as span:
+            span.set_attribute("feed.source", source)
+            start_time = time.time()
 
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
+            try:
+                url = 'https://threatfox.abuse.ch/downloads/hostfile/'
+                logger.info("Fetching threat feed", extra={'source': source, 'url': url})
 
-            indicators = []
-            lines = response.text.split('\n')
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
 
-            for line in lines:
-                if line.startswith('#') or not line.strip():
-                    continue
+                indicators = []
+                lines = response.text.split('\n')
 
-                try:
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        indicator = {
-                            'ip': parts[0],
-                            'domain': parts[1],
-                            'source': source,
-                            'timestamp': datetime.utcnow().isoformat(),
-                            'type': 'malicious_host'
-                        }
-                        indicators.append(indicator)
-                except Exception as e:
-                    logger.debug(f"Skipping malformed line: {e}")
-                    continue
+                for line in lines:
+                    if line.startswith('#') or not line.strip():
+                        continue
 
-            feed_last_success.labels(source=source).set(time.time())
-            logger.info(f"Fetched {len(indicators)} indicators from {source}")
-            return indicators[:100]  # Limit to first 100 for POC
+                    try:
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            indicator = {
+                                'ip': parts[0],
+                                'domain': parts[1],
+                                'source': source,
+                                'timestamp': datetime.utcnow().isoformat(),
+                                'type': 'malicious_host'
+                            }
+                            indicators.append(indicator)
+                    except Exception as e:
+                        logger.debug(f"Skipping malformed line: {e}")
+                        continue
 
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch {source} feed: {e}")
-            external_api_errors.labels(source=source, error_type='request_failed').inc()
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error fetching {source}: {e}")
-            external_api_errors.labels(source=source, error_type='parse_error').inc()
-            return []
+                duration_ms = (time.time() - start_time) * 1000
+                feed_last_success.labels(source=source).set(time.time())
+                span.set_attribute("feed.indicators_count", len(indicators))
+                span.set_attribute("feed.duration_ms", duration_ms)
+
+                logger.info("Feed fetch successful", extra={
+                    'source': source,
+                    'count': len(indicators),
+                    'duration_ms': duration_ms
+                })
+                return indicators[:100]  # Limit to first 100 for POC
+
+            except requests.RequestException as e:
+                span.record_exception(e)
+                span.set_attribute("error", True)
+                logger.error("Failed to fetch feed", extra={'source': source, 'error_type': 'request_failed'}, exc_info=True)
+                external_api_errors.labels(source=source, error_type='request_failed').inc()
+                return []
+            except Exception as e:
+                span.record_exception(e)
+                span.set_attribute("error", True)
+                logger.error("Unexpected error fetching feed", extra={'source': source, 'error_type': 'parse_error'}, exc_info=True)
+                external_api_errors.labels(source=source, error_type='parse_error').inc()
+                return []
 
     def process_indicators(self, indicators: List[Dict[str, Any]]):
         """Process and store indicators in Redis"""

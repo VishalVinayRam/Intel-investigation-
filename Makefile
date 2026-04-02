@@ -68,6 +68,58 @@ deploy: build-minikube tf-apply k8s-apply ## Full deployment to minikube
 	@echo "View logs: kubectl logs -f -n $(NAMESPACE) -l app=intel-worker"
 	@echo "Access metrics: kubectl port-forward -n $(NAMESPACE) svc/intel-worker 8000:8000"
 
+# LGTM Stack (Loki, Grafana, Tempo, Mimir)
+lgtm-deploy: ## Deploy LGTM observability stack
+	@echo "Deploying LGTM stack (Loki, Grafana, Tempo, Mimir)..."
+	kubectl apply -f k8s/lgtm-stack.yaml
+	@echo "Waiting for LGTM components to be ready..."
+	kubectl wait --for=condition=ready pod -l app=grafana -n monitoring --timeout=300s || true
+	kubectl wait --for=condition=ready pod -l app=loki -n monitoring --timeout=300s || true
+	kubectl wait --for=condition=ready pod -l app=tempo -n monitoring --timeout=300s || true
+	kubectl wait --for=condition=ready pod -l app=mimir -n monitoring --timeout=300s || true
+	@echo ""
+	@echo "LGTM Stack deployed!"
+	@echo "Access Grafana: kubectl port-forward -n monitoring svc/grafana 3000:3000"
+	@echo "Open http://localhost:3000 (admin/admin)"
+
+lgtm-status: ## Check LGTM stack status
+	@echo "=== LGTM Stack Status ==="
+	kubectl get all -n monitoring
+
+lgtm-delete: ## Delete LGTM stack
+	kubectl delete -f k8s/lgtm-stack.yaml
+
+grafana: ## Port-forward to Grafana
+	@echo "Accessing Grafana at http://localhost:3000"
+	@echo "Username: admin / Password: admin"
+	kubectl port-forward -n monitoring svc/grafana 3000:3000
+
+loki: ## Port-forward to Loki
+	@echo "Accessing Loki at http://localhost:3100"
+	kubectl port-forward -n monitoring svc/loki 3100:3100
+
+tempo: ## Port-forward to Tempo
+	@echo "Accessing Tempo at http://localhost:3200"
+	kubectl port-forward -n monitoring svc/tempo 3200:3200
+
+full-deploy: minikube-start build-minikube tf-apply k8s-apply lgtm-deploy ## Complete deployment with LGTM stack
+	@echo ""
+	@echo "========================================="
+	@echo "Full deployment complete!"
+	@echo "========================================="
+	@echo ""
+	@echo "Threat Intelligence Worker:"
+	@echo "  - Status: kubectl get pods -n $(NAMESPACE)"
+	@echo "  - Logs: kubectl logs -f -n $(NAMESPACE) -l app=intel-worker"
+	@echo "  - Metrics: kubectl port-forward -n $(NAMESPACE) svc/intel-worker 8000:8000"
+	@echo ""
+	@echo "LGTM Observability Stack:"
+	@echo "  - Grafana: make grafana (then open http://localhost:3000)"
+	@echo "  - Logs: Loki + Promtail"
+	@echo "  - Traces: Tempo"
+	@echo "  - Metrics: Mimir + Prometheus"
+	@echo ""
+
 destroy: k8s-delete tf-destroy ## Destroy all resources
 	@echo "All resources destroyed"
 
