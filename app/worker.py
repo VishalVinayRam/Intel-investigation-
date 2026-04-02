@@ -366,7 +366,7 @@ def main():
     logger.info(f"Starting metrics server on port {metrics_port}")
 
     metrics_thread = threading.Thread(
-        target=lambda: app.run(host='0.0.0.0', port=metrics_port),
+        target=lambda: app.run(host='0.0.0.0', port=metrics_port),  # nosec B104
         daemon=True
     )
     metrics_thread.start()
