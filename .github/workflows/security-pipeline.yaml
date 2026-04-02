@@ -55,8 +55,8 @@ jobs:
     - name: Run Safety check for vulnerable dependencies
       run: |
         echo "Checking for vulnerable dependencies..."
-        safety check --file=app/requirements.txt --policy-file=.safety-policy.yml --json > safety-report.json || true
-        safety check --file=app/requirements.txt --policy-file=.safety-policy.yml
+        safety scan --file=app/requirements.txt --policy-file=.safety-policy.yml --json > safety-report.json || true
+        safety scan --file=app/requirements.txt --policy-file=.safety-policy.yml
 
     - name: Upload Security Scan Results
       uses: actions/upload-artifact@v4
