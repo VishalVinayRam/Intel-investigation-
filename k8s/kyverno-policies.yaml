@@ -1,0 +1,66 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-non-root-and-secure-context
+  annotations:
+    policies.kyverno.io/title: Require Non Root and Secure Context
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Enforces that all pods in the intel-ingestion namespace
+      must run as non-root, drop all capabilities, and disallow
+      privilege escalation to maintain a secure baseline.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - intel-ingestion
+      validate:
+        message: "Running as root is not allowed. Set runAsNonRoot to true."
+        pattern:
+          spec:
+            =(securityContext):
+              =(runAsNonRoot): true
+            containers:
+              - =(securityContext):
+                  =(runAsNonRoot): true
+
+    - name: disallow-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - intel-ingestion
+      validate:
+        message: "Privilege escalation is disallowed. Set allowPrivilegeEscalation to false."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: false
+
+    - name: drop-all-capabilities
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - intel-ingestion
+      validate:
+        message: "All capabilities must be dropped explicitly. Set capabilities.drop to [\"ALL\"]."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  capabilities:
+                    drop:
+                      - ALL

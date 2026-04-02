@@ -57,16 +57,26 @@ tf-destroy: ## Destroy Terraform resources
 
 # Kubernetes
 k8s-apply: ## Apply Kubernetes manifests
-	kubectl apply -f k8s/
+	minikube kubectl -- apply -f k8s/
 
 k8s-delete: ## Delete Kubernetes resources
-	kubectl delete -f k8s/ --ignore-not-found=true
+	minikube kubectl -- delete -f k8s/ --ignore-not-found=true
 
-deploy: build-minikube tf-apply k8s-apply ## Full deployment to minikube
+deploy: build-minikube tf-apply kyverno-deploy k8s-apply ## Full deployment to minikube
 	@echo "Deployment complete!"
 	@echo "Check status: kubectl get pods -n $(NAMESPACE)"
 	@echo "View logs: kubectl logs -f -n $(NAMESPACE) -l app=intel-worker"
 	@echo "Access metrics: kubectl port-forward -n $(NAMESPACE) svc/intel-worker 8000:8000"
+
+# Kyverno (Admission Controller)
+kyverno-deploy: ## Deploy Kyverno Admission Controller and policies
+	@echo "Deploying Kyverno..."
+	minikube kubectl -- create -f https://github.com/kyverno/kyverno/releases/download/v1.11.4/install.yaml || true
+	@echo "Waiting for Kyverno to become ready..."
+	minikube kubectl -- wait --for=condition=ready pod -l app.kubernetes.io/name=kyverno -n kyverno --timeout=300s || true
+	@echo "Applying Kyverno ClusterPolicies..."
+	minikube kubectl -- apply -k k8s/ || minikube kubectl -- apply -f k8s/kyverno-policies.yaml
+	@echo "Kyverno successfully deployed!"
 
 # LGTM Stack (Loki, Grafana, Tempo, Mimir)
 lgtm-deploy: ## Deploy LGTM observability stack
