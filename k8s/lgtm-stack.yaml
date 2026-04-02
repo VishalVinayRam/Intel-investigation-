@@ -280,6 +280,9 @@ data:
         duration_slo: 5s
 
     distributor:
+      ring:
+        kvstore:
+          store: inmemory
       receivers:
         jaeger:
           protocols:
@@ -297,6 +300,12 @@ data:
               endpoint: 0.0.0.0:4317
         opencensus:
 
+    ingester:
+      lifecycler:
+        ring:
+          kvstore:
+            store: inmemory
+          replication_factor: 1
 
     metrics_generator:
       ring:
@@ -310,6 +319,12 @@ data:
           path: /tmp/tempo/wal
         local:
           path: /tmp/tempo/blocks
+
+    overrides:
+      defaults:
+        ingestion:
+          max_traces_per_user: 10000
+
 
 ---
 apiVersion: apps/v1
