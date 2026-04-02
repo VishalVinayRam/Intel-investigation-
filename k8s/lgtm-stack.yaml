@@ -300,6 +300,18 @@ data:
               endpoint: 0.0.0.0:4317
         opencensus:
 
+    memberlist:
+      abort_if_cluster_join_fails: false
+      bind_port: 7946
+      join_members: [127.0.0.1:7946]
+
+    ingester:
+      lifecycler:
+        ring:
+          kvstore:
+            store: inmemory
+          replication_factor: 1
+
 
     metrics_generator:
       ring:

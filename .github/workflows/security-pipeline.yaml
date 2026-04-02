@@ -17,10 +17,12 @@ jobs:
   sast-scan:
     name: SAST Security Scan
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       contents: read
       security-events: write
+      actions: read
+      checks: write
+      pull-requests: write
 
     steps:
     - name: Checkout code
@@ -75,10 +77,12 @@ jobs:
   sca-scan:
     name: SCA Dependency Scan
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       contents: read
       security-events: write
+      actions: read
+      checks: write
+      pull-requests: write
 
     steps:
     - name: Checkout code
@@ -119,6 +123,9 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: read
+      checks: write
+      pull-requests: write
 
     steps:
     - name: Checkout code
