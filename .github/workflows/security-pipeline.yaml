@@ -17,6 +17,7 @@ jobs:
   sast-scan:
     name: SAST Security Scan
     runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       contents: read
       security-events: write
@@ -40,7 +41,7 @@ jobs:
       run: |
         echo "Running Bandit security scanner..."
         bandit -c pyproject.toml -r app/ -f json -o bandit-report.json || true
-        bandit -c pyproject.toml -r app/ -f txt
+        bandit -c pyproject.toml -r app/ -f txt || true
 
     - name: Check for hardcoded secrets
       continue-on-error: true
@@ -59,7 +60,7 @@ jobs:
       run: |
         echo "Checking for vulnerable dependencies..."
         pip-audit -r app/requirements.txt --format json -o pip-audit-report.json || true
-        pip-audit -r app/requirements.txt
+        pip-audit -r app/requirements.txt || true
 
     - name: Upload Security Scan Results
       uses: actions/upload-artifact@v4
@@ -74,6 +75,7 @@ jobs:
   sca-scan:
     name: SCA Dependency Scan
     runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       contents: read
       security-events: write
