@@ -38,8 +38,8 @@ jobs:
     - name: Run Bandit SAST scan
       run: |
         echo "Running Bandit security scanner..."
-        bandit -r app/ -f json -o bandit-report.json || true
-        bandit -r app/ -f txt
+        bandit -c pyproject.toml -r app/ -f json -o bandit-report.json || true
+        bandit -c pyproject.toml -r app/ -f txt
 
     - name: Check for hardcoded secrets
       run: |

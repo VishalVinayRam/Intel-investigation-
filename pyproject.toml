@@ -1,0 +1,4 @@
+[tool.bandit]
+exclude_dirs = ["venv", ".venv", "tests", "__pycache__"]
+# B104: Possible binding to all interfaces (false positive in dockerized apps)
+skips = ["B104"]
