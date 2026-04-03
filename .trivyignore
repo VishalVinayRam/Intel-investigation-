@@ -5,3 +5,16 @@
 # The following are sometimes reported as 'fix_deferred' in Debian.
 # Only ignore if you have verified that the risk is mitigated or acceptable.
 # CVE-2026-4046  # glibc: iconv() DoS (fix_deferred in some Debian versions)
+
+# zlib1g: integer overflow in zipOpenNewFileInZip4_6 — status: will_not_fix in Debian bookworm.
+# No upstream patch has been applied to the bookworm package; risk is limited to zip file
+# creation paths not used by this application.
+CVE-2023-45853
+
+# ncurses: buffer overflow vulnerability — status: will_not_fix in Debian bookworm.
+# Affects ncurses terminal library; not exploitable in a non-interactive container workload.
+CVE-2025-69720
+
+# systemd/libudev1: spurious IPC vulnerability — status: will_not_fix in Debian bookworm.
+# libudev1 is a transitive dependency of curl; no systemd services run inside the container.
+CVE-2026-29111
