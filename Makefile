@@ -241,7 +241,7 @@ scan-deps: ## Scan dependencies for vulnerabilities
 scan-image: build ## Scan Docker image with Trivy
 	@echo "Running Trivy scan..."
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-		aquasec/trivy:latest image $(IMAGE_NAME):$(IMAGE_TAG)
+		aquasecurity/trivy:0.69.3 image $(IMAGE_NAME):$(IMAGE_TAG)
 
 scan-all: scan-code scan-deps scan-image ## Run all security scans
 
