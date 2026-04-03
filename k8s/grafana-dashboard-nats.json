@@ -1,0 +1,482 @@
+{
+  "dashboard": {
+    "title": "Threat Intelligence with NATS Monitoring",
+    "uid": "threat-intel-nats",
+    "timezone": "utc",
+    "schemaVersion": 16,
+    "version": 2,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "NATS Queue Backlog",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "nats_queue_backlog",
+            "refId": "A",
+            "legendFormat": "Pending Messages",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": {
+              "mode": "palette-classic"
+            }
+          }
+        },
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [10000],
+                "type": "gt"
+              },
+              "query": {
+                "params": ["A", "5m", "now"]
+              },
+              "reducer": {
+                "type": "avg"
+              },
+              "type": "query"
+            }
+          ],
+          "name": "High NATS Queue Backlog"
+        }
+      },
+      {
+        "id": 2,
+        "title": "Indicators Published to NATS (Fetcher)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(threat_indicators_published_total[5m])",
+            "refId": "A",
+            "legendFormat": "{{source}} - {{type}}",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Indicators Consumed from NATS (Processor)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(threat_indicators_consumed_total[5m])",
+            "refId": "A",
+            "legendFormat": "{{source}} - {{type}}",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        }
+      },
+      {
+        "id": 4,
+        "title": "Indicators Processed Successfully",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(threat_indicators_processed_total[5m]))",
+            "refId": "A",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 6,
+          "x": 12,
+          "y": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops",
+            "decimals": 2,
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "yellow"},
+                {"value": 10, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Processing Failures",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(threat_indicators_failed_total[5m]))",
+            "refId": "A",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 6,
+          "x": 18,
+          "y": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops",
+            "decimals": 2,
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 1, "color": "yellow"},
+                {"value": 10, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "NATS Publish Errors",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(nats_publish_errors_total[5m])",
+            "refId": "A",
+            "legendFormat": "{{source}} - {{error_type}}",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 16
+        }
+      },
+      {
+        "id": 7,
+        "title": "NATS Message Processing Errors",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(nats_message_errors_total[5m])",
+            "refId": "A",
+            "legendFormat": "{{error_type}}",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 16
+        }
+      },
+      {
+        "id": 8,
+        "title": "Processing Duration (p95)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(indicator_processing_duration_seconds_bucket[5m])) by (source, type, le))",
+            "refId": "A",
+            "legendFormat": "{{source}} - {{type}}",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 24
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Processor Pod Count (HPA)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "count(kube_pod_info{namespace=\"intel-ingestion\", pod=~\"intel-processor-.*\"})",
+            "refId": "A",
+            "legendFormat": "Active Processor Pods",
+            "datasource": "Mimir"
+          },
+          {
+            "expr": "kube_horizontalpodautoscaler_spec_min_replicas{horizontalpodautoscaler=\"intel-processor-hpa\"}",
+            "refId": "B",
+            "legendFormat": "Min Replicas",
+            "datasource": "Mimir"
+          },
+          {
+            "expr": "kube_horizontalpodautoscaler_spec_max_replicas{horizontalpodautoscaler=\"intel-processor-hpa\"}",
+            "refId": "C",
+            "legendFormat": "Max Replicas",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 24
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "Feed Fetch Success/Failure",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(threat_feeds_fetched_total{status=\"success\"}[5m])",
+            "refId": "A",
+            "legendFormat": "{{source}} - Success",
+            "datasource": "Mimir"
+          },
+          {
+            "expr": "rate(threat_feeds_fetched_total{status=\"failed\"}[5m])",
+            "refId": "B",
+            "legendFormat": "{{source}} - Failed",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 32
+        }
+      },
+      {
+        "id": 11,
+        "title": "Redis Operations",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(redis_storage_operations_total[5m])",
+            "refId": "A",
+            "legendFormat": "{{operation}} - {{status}}",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 32
+        }
+      },
+      {
+        "id": 12,
+        "title": "NATS Server Metrics - Messages In/Out",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(gnatsd_varz_in_msgs[5m])",
+            "refId": "A",
+            "legendFormat": "Messages In",
+            "datasource": "Mimir"
+          },
+          {
+            "expr": "rate(gnatsd_varz_out_msgs[5m])",
+            "refId": "B",
+            "legendFormat": "Messages Out",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 40
+        }
+      },
+      {
+        "id": 13,
+        "title": "NATS JetStream Stream Info",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "jetstream_streams",
+            "refId": "A",
+            "legendFormat": "Active Streams",
+            "datasource": "Mimir"
+          },
+          {
+            "expr": "jetstream_consumers",
+            "refId": "B",
+            "legendFormat": "Active Consumers",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 6,
+          "x": 12,
+          "y": 40
+        }
+      },
+      {
+        "id": 14,
+        "title": "NATS Connection Count",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "gnatsd_varz_connections",
+            "refId": "A",
+            "datasource": "Mimir"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 6,
+          "x": 18,
+          "y": 40
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "yellow"},
+                {"value": 3, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 15,
+        "title": "Application Logs (All Services)",
+        "type": "logs",
+        "targets": [
+          {
+            "expr": "{namespace=\"intel-ingestion\", app=~\"intel-fetcher|intel-processor|intel-worker\"}",
+            "refId": "A",
+            "datasource": "Loki"
+          }
+        ],
+        "gridPos": {
+          "h": 12,
+          "w": 24,
+          "x": 0,
+          "y": 48
+        }
+      },
+      {
+        "id": 16,
+        "title": "Fetcher Traces",
+        "type": "traces",
+        "targets": [
+          {
+            "query": "{service.name=\"intel-fetcher\"}",
+            "refId": "A",
+            "queryType": "traceql",
+            "datasource": "Tempo"
+          }
+        ],
+        "gridPos": {
+          "h": 10,
+          "w": 12,
+          "x": 0,
+          "y": 60
+        }
+      },
+      {
+        "id": 17,
+        "title": "Processor Traces",
+        "type": "traces",
+        "targets": [
+          {
+            "query": "{service.name=\"intel-processor\"}",
+            "refId": "A",
+            "queryType": "traceql",
+            "datasource": "Tempo"
+          }
+        ],
+        "gridPos": {
+          "h": 10,
+          "w": 12,
+          "x": 12,
+          "y": 60
+        }
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus"
+        },
+        {
+          "name": "namespace",
+          "type": "constant",
+          "query": "intel-ingestion"
+        }
+      ]
+    },
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": ["10s", "30s", "1m", "5m", "15m"]
+    },
+    "annotations": {
+      "list": [
+        {
+          "datasource": "Loki",
+          "enable": true,
+          "expr": "{namespace=\"intel-ingestion\", level=\"ERROR\"}",
+          "iconColor": "red",
+          "name": "Errors",
+          "tagKeys": "source,level"
+        }
+      ]
+    }
+  }
+}

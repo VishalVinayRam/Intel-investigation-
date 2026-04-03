@@ -1,0 +1,224 @@
+---
+# Threat Intelligence Processor (Consumer) Deployment
+# Consumes from NATS JetStream and processes threat indicators
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: intel-processor
+  namespace: intel-ingestion
+  labels:
+    app: intel-processor
+    component: consumer
+    tier: data-processing
+spec:
+  replicas: 3  # Start with 3 replicas, HPA will scale based on load
+  selector:
+    matchLabels:
+      app: intel-processor
+  template:
+    metadata:
+      labels:
+        app: intel-processor
+        component: consumer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: intel-worker-sa
+
+      # Security context for pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+      - name: processor
+        image: intel-processor:latest
+        imagePullPolicy: IfNotPresent
+
+        # Security context for container
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+
+        ports:
+        - name: metrics
+          containerPort: 8002
+          protocol: TCP
+
+        env:
+        - name: NATS_URL
+          value: "nats://nats-client.nats-system:4222"
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: worker-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: worker-config
+              key: REDIS_PORT
+        - name: BATCH_SIZE
+          value: "10"  # Process 10 messages per fetch
+        - name: CONSUMER_NAME
+          value: "processor-group"
+        - name: METRICS_PORT
+          value: "8002"
+        - name: TEMPO_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: worker-config
+              key: TEMPO_ENDPOINT
+              optional: true
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: worker-config
+              key: ENVIRONMENT
+              optional: true
+
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+
+        # Volume mounts for read-only filesystem
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+      volumes:
+      - name: tmp
+        emptyDir: {}
+
+      # Restart policy
+      restartPolicy: Always
+
+      # Anti-affinity to spread processors across nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - intel-processor
+              topologyKey: kubernetes.io/hostname
+
+---
+# Service for Processor metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: intel-processor
+  namespace: intel-ingestion
+  labels:
+    app: intel-processor
+    component: consumer
+spec:
+  type: ClusterIP
+  selector:
+    app: intel-processor
+  ports:
+  - name: metrics
+    port: 8002
+    targetPort: 8002
+    protocol: TCP
+
+
+---
+# Horizontal Pod Autoscaler for dynamic scaling
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: intel-processor-hpa
+  namespace: intel-ingestion
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: intel-processor
+  minReplicas: 3
+  maxReplicas: 50
+  metrics:
+  # Scale based on CPU utilization
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+  # Scale based on memory utilization
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+  # Custom metric: queue backlog (requires metrics-server and custom metrics API)
+  # - type: Pods
+  #   pods:
+  #     metric:
+  #       name: nats_queue_backlog
+  #     target:
+  #       type: AverageValue
+  #       averageValue: "1000"
+
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 minutes before scaling down
+      policies:
+      - type: Percent
+        value: 50  # Scale down max 50% of pods at a time
+        periodSeconds: 60
+      - type: Pods
+        value: 5  # Or remove max 5 pods at a time
+        periodSeconds: 60
+      selectPolicy: Min
+
+    scaleUp:
+      stabilizationWindowSeconds: 60  # Wait 1 minute before scaling up
+      policies:
+      - type: Percent
+        value: 100  # Scale up max 100% of pods at a time
+        periodSeconds: 30
+      - type: Pods
+        value: 10  # Or add max 10 pods at a time
+        periodSeconds: 30
+      selectPolicy: Max

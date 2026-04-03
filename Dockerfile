@@ -2,7 +2,7 @@
 # Security Hardening: Non-root user, minimal base image, no secrets
 
 # Stage 1: Builder stage
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.11-slim AS builder
 
 # Set working directory
 WORKDIR /build
@@ -16,11 +16,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime stage
-FROM python:3.11-slim-bookworm
-
-# Security Build: Upgrade system packages to pull latest security patches
-RUN apt-get update && apt-get upgrade -y && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+FROM python:3.11-slim
 
 # Security: Create non-root user
 RUN groupadd -r appuser && \
