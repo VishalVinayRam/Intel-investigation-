@@ -1,0 +1,100 @@
+---
+# RBAC for Automatic Key Rotation
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: key-rotator-sa
+  namespace: intel-ingestion
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: secret-manager-role
+  namespace: intel-ingestion
+rules:
+- apiGroups: [""]
+  resources: ["secrets", "pods", "pods/exec"]
+  verbs: ["get", "patch", "update", "create", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: key-rotator-binding
+  namespace: intel-ingestion
+subjects:
+- kind: ServiceAccount
+  name: key-rotator-sa
+  namespace: intel-ingestion
+roleRef:
+  kind: Role
+  name: secret-manager-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# CronJob for Automated Redis Password Rotation
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-key-rotator
+  namespace: intel-ingestion
+spec:
+  schedule: "0 * * * *"  # Rotate every hour
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: key-rotator-sa
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: rotator
+            image: bitnami/kubectl:latest
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              capabilities:
+                drop: ["ALL"]
+              readOnlyRootFilesystem: true
+            volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # 1. Generate a secure random password
+              NEW_PASS=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 32)
+              
+              # 2. Get the current password from the secret
+              OLD_PASS=$(kubectl get secret threat-feed-secrets -o jsonpath='{.data.REDIS_PASSWORD}' | base64 -d)
+              
+              echo "Attempting to rotate Redis password..."
+              
+              # 3. Update Redis live using CONFIG SET (No restart needed!)
+              if [ -z "$OLD_PASS" ]; then
+                kubectl exec deploy/redis -- redis-cli CONFIG SET requirepass "$NEW_PASS"
+              else
+                kubectl exec deploy/redis -- redis-cli -a "$OLD_PASS" --no-auth-warning CONFIG SET requirepass "$NEW_PASS"
+              fi
+              
+              if [ $? -eq 0 ]; then
+                echo "Redis live update successful. Updating Kubernetes Secret..."
+                kubectl patch secret threat-feed-secrets -p="{\"data\": {\"REDIS_PASSWORD\": \"$(echo -n $NEW_PASS | base64)\"}}"
+                echo "Rotation complete."
+              else
+                echo "Failed to update Redis password."
+                exit 1
+              fi
+          restartPolicy: OnFailure
+          volumes:
+          - name: tmp
+            emptyDir: {}

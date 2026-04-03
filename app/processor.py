@@ -192,15 +192,25 @@ class ThreatIndicatorProcessor:
         return False
 
     def connect_redis(self):
-        """Connect to Redis with retry logic"""
+        """Connect to Redis with rotation support and retry logic"""
         max_retries = 5
         retry_delay = 5
 
+        # Initial password load from volume mount (for rotation)
+        password_path = os.getenv('REDIS_PASSWORD_FILE', '/etc/secrets/REDIS_PASSWORD')
+        self.redis_password = os.getenv('REDIS_PASSWORD', '')
+
         for attempt in range(max_retries):
             try:
+                # Reload password from file in case it was rotated during retry loop
+                if os.path.exists(password_path):
+                    with open(password_path, 'r') as f:
+                        self.redis_password = f.read().strip()
+
                 self.redis_client = redis.Redis(
                     host=self.redis_host,
                     port=self.redis_port,
+                    password=self.redis_password if self.redis_password else None,
                     decode_responses=True,
                     socket_connect_timeout=5,
                     socket_timeout=5
@@ -208,10 +218,10 @@ class ThreatIndicatorProcessor:
 
                 # Test connection
                 self.redis_client.ping()
-
                 logger.info("Connected to Redis", extra={
                     'redis_host': self.redis_host,
-                    'redis_port': self.redis_port
+                    'redis_port': self.redis_port,
+                    'is_authenticated': bool(self.redis_password)
                 })
                 return True
 
@@ -334,7 +344,13 @@ class ThreatIndicatorProcessor:
                 stream=self.stream_name
             )
 
+            iteration = 0
             while True:
+                iteration += 1
+                # Periodically check for key rotation (every 10 batches)
+                if iteration % 10 == 0:
+                    await self.check_key_rotation()
+
                 try:
                     # Fetch batch of messages
                     with tracer.start_as_current_span("fetch_batch") as span:
@@ -415,6 +431,20 @@ class ThreatIndicatorProcessor:
         except Exception as e:
             logger.error("Fatal error in consumer loop", exc_info=True)
             raise
+
+    async def check_key_rotation(self):
+        """Check for rotated keys in mounted secrets."""
+        password_path = os.getenv('REDIS_PASSWORD_FILE', '/etc/secrets/REDIS_PASSWORD')
+        if os.path.exists(password_path):
+            try:
+                with open(password_path, 'r') as f:
+                    new_password = f.read().strip()
+                if new_password != self.redis_password:
+                    logger.info("Key rotation detected! Reconnecting to Redis...")
+                    self.redis_password = new_password
+                    self.connect_redis()
+            except Exception as e:
+                logger.error("Error during key rotation check", extra={"error": str(e)})
 
     async def get_stream_info(self):
         """Get stream information for monitoring"""

@@ -86,6 +86,8 @@ spec:
               name: worker-config
               key: ENVIRONMENT
               optional: true
+        - name: REDIS_PASSWORD_FILE
+          value: "/etc/secrets/REDIS_PASSWORD"
 
         resources:
           requests:
@@ -99,6 +101,9 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        - name: secrets
+          mountPath: /etc/secrets
+          readOnly: true
 
         livenessProbe:
           httpGet:
@@ -117,10 +122,13 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
-
       volumes:
       - name: tmp
         emptyDir: {}
+      - name: secrets
+        secret:
+          secretName: threat-feed-secrets
+          defaultMode: 0444
 
       # Restart policy
       restartPolicy: Always
