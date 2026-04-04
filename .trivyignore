@@ -15,5 +15,9 @@ CVE-2025-69720
 # systemd: Spurious IPC ACE/DoS (affected, no systemd daemon in container)
 CVE-2026-29111
 
+CVE-2026-0861
+
+CVE-2025-7458
+
 # zlib1g: integer overflow in zipOpenNewFileInZip4_6 (will_not_fix in Bookworm)
 CVE-2023-45853
