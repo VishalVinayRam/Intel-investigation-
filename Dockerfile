@@ -12,15 +12,19 @@ COPY app/requirements.txt .
 
 # Create virtual environment and install dependencies
 RUN python -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip "setuptools>=80.1.0" "wheel>=0.46.2" && \
     /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime stage
 FROM python:3.11-slim-bookworm
 
-# Security Build: Upgrade system packages to pull latest security patches
-RUN apt-get update && apt-get upgrade -y && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# Security: Install mandatory security updates and upgrade system-level python tools
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends curl && \
+    pip install --no-cache-dir --upgrade pip setuptools>=80.1.0 wheel>=0.46.2 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Security: Create non-root user
 RUN groupadd -r appuser && \

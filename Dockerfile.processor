@@ -1,0 +1,26 @@
+# Multi-stage Dockerfile for Threat Intelligence Processor (Consumer)
+# Stage 1: Builder
+FROM python:3.11-slim-bookworm AS builder
+WORKDIR /build
+COPY app/requirements.txt .
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip "setuptools>=80.1.0" "wheel>=0.46.2" && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+
+# Stage 2: Runtime
+# Stage 2: Runtime
+FROM python:3.11-slim-bookworm
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    pip install --no-cache-dir --upgrade pip "setuptools>=80.1.0" "wheel>=0.46.2" && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY app/processor.py .
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 -m -s /sbin/nologin appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1
+EXPOSE 8002
+CMD ["python", "processor.py"]

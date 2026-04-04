@@ -350,7 +350,7 @@ spec:
     spec:
       containers:
       - name: tempo
-        image: grafana/tempo:latest
+        image: grafana/tempo:2.3.1
         args:
         - -config.file=/etc/tempo/tempo.yaml
         ports:
@@ -474,7 +474,7 @@ spec:
     spec:
       containers:
       - name: mimir
-        image: grafana/mimir:latest
+        image: grafana/mimir:2.10.0
         args:
         - -config.file=/etc/mimir/mimir.yaml
         ports:
@@ -540,15 +540,12 @@ data:
     - url: http://mimir:9009/api/v1/push
 
     scrape_configs:
-    - job_name: 'intel-worker'
+    - job_name: 'kubernetes-services'
       kubernetes_sd_configs:
       - role: service
-        namespaces:
-          names:
-          - intel-ingestion
       relabel_configs:
-      - source_labels: [__meta_kubernetes_service_name]
-        regex: intel-worker
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        regex: 'true'
         action: keep
       - source_labels: [__meta_kubernetes_service_label_app]
         target_label: app
@@ -558,9 +555,6 @@ data:
     - job_name: 'kubernetes-pods'
       kubernetes_sd_configs:
       - role: pod
-        namespaces:
-          names:
-          - intel-ingestion
       relabel_configs:
       - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
         regex: 'true'
@@ -716,6 +710,217 @@ data:
         prometheusType: Mimir
 
 ---
+# Grafana Dashboard Provisioning — tells Grafana where to find dashboards
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provisioning
+  namespace: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+    - name: intel-pipeline
+      orgId: 1
+      folder: Intel Pipeline
+      type: file
+      disableDeletion: false
+      updateIntervalSeconds: 30
+      options:
+        path: /etc/grafana/provisioning/dashboards/json
+
+---
+# Grafana Dashboard JSON — Intel Ingestion Pipeline + Tempo traces
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-json
+  namespace: monitoring
+data:
+  intel-pipeline.json: |
+    {
+      "title": "Intel Ingestion Pipeline",
+      "uid": "intel-pipeline-v1",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "mimir_ds",
+            "type": "datasource",
+            "query": "prometheus",
+            "label": "Metrics Source",
+            "hide": 0,
+            "refresh": 1
+          },
+          {
+            "name": "tempo_ds",
+            "type": "datasource",
+            "query": "tempo",
+            "label": "Traces Source",
+            "hide": 0,
+            "refresh": 1
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Indicators Consumed (NATS)",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [{
+            "expr": "sum(increase(threat_indicators_consumed_total[1h]))",
+            "legendFormat": "Consumed"
+          }],
+          "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } } }
+        },
+        {
+          "id": 2,
+          "title": "Indicators Processed (Redis)",
+          "type": "stat",
+          "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [{
+            "expr": "sum(increase(threat_indicators_processed_total[1h]))",
+            "legendFormat": "Processed"
+          }],
+          "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } } }
+        },
+        {
+          "id": 3,
+          "title": "Failed Indicators",
+          "type": "stat",
+          "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [{
+            "expr": "sum(increase(threat_indicators_failed_total[1h]))",
+            "legendFormat": "Failed"
+          }],
+          "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 10 }] } } }
+        },
+        {
+          "id": 4,
+          "title": "NATS Queue Backlog",
+          "type": "stat",
+          "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [{
+            "expr": "nats_queue_backlog",
+            "legendFormat": "Pending"
+          }],
+          "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1000 }, { "color": "red", "value": 10000 }] } } }
+        },
+        {
+          "id": 5,
+          "title": "Throughput — Consumed vs Processed (per min)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [
+            { "expr": "sum(rate(threat_indicators_consumed_total[1m])) * 60", "legendFormat": "Consumed/min" },
+            { "expr": "sum(rate(threat_indicators_processed_total[1m])) * 60", "legendFormat": "Processed/min" },
+            { "expr": "sum(rate(threat_indicators_failed_total[1m])) * 60", "legendFormat": "Failed/min" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 6,
+          "title": "NATS Queue Backlog Over Time",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [
+            { "expr": "nats_queue_backlog", "legendFormat": "Queue Depth" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 20 }, "color": { "fixedColor": "orange", "mode": "fixed" } } }
+        },
+        {
+          "id": 7,
+          "title": "Processing Duration — P50 / P95 / P99 (seconds)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [
+            { "expr": "histogram_quantile(0.50, sum(rate(indicator_processing_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+            { "expr": "histogram_quantile(0.95, sum(rate(indicator_processing_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" },
+            { "expr": "histogram_quantile(0.99, sum(rate(indicator_processing_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 8,
+          "title": "Redis Storage Operations (per min)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [
+            { "expr": "sum(rate(redis_storage_operations_total{status='success'}[1m])) * 60", "legendFormat": "Success/min" },
+            { "expr": "sum(rate(redis_storage_operations_total{status='failed'}[1m])) * 60", "legendFormat": "Failed/min" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 } } }
+        },
+        {
+          "id": 9,
+          "title": "NATS Publish Errors by Source",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 20, "w": 12, "h": 7 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [
+            { "expr": "sum by (source) (rate(nats_publish_errors_total[1m])) * 60", "legendFormat": "{{source}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 }, "color": { "fixedColor": "red", "mode": "fixed" } } }
+        },
+        {
+          "id": 10,
+          "title": "Processor Replica Count",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 20, "w": 12, "h": 7 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [
+            { "expr": "count(up{app='intel-processor'})", "legendFormat": "Active Replicas" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 10 }, "color": { "fixedColor": "purple", "mode": "fixed" } } }
+        },
+        {
+          "id": 11,
+          "title": "Traces — Recent Spans (Tempo)",
+          "type": "traces",
+          "gridPos": { "x": 0, "y": 27, "w": 24, "h": 10 },
+          "datasource": { "type": "tempo", "uid": "${tempo_ds}" },
+          "targets": [{
+            "queryType": "traceql",
+            "query": "{resource.service.name=~\"intel-processor|intel-worker|intel-fetcher\"}",
+            "limit": 20
+          }],
+          "options": {
+            "dedupStrategy": "none",
+            "sortBy": "startTime"
+          }
+        },
+        {
+          "id": 12,
+          "title": "Span Duration Heatmap — process_indicator",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 37, "w": 24, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "${mimir_ds}" },
+          "targets": [
+            { "expr": "histogram_quantile(0.50, sum(rate(indicator_processing_duration_seconds_bucket[2m])) by (le, source))", "legendFormat": "p50 — {{source}}" },
+            { "expr": "histogram_quantile(0.95, sum(rate(indicator_processing_duration_seconds_bucket[2m])) by (le, source))", "legendFormat": "p95 — {{source}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 1 } } }
+        }
+      ]
+    }
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -749,6 +954,10 @@ spec:
         volumeMounts:
         - name: datasources
           mountPath: /etc/grafana/provisioning/datasources
+        - name: dashboard-provisioning
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: dashboard-json
+          mountPath: /etc/grafana/provisioning/dashboards/json
         - name: storage
           mountPath: /var/lib/grafana
         resources:
@@ -762,6 +971,12 @@ spec:
       - name: datasources
         configMap:
           name: grafana-datasources
+      - name: dashboard-provisioning
+        configMap:
+          name: grafana-dashboard-provisioning
+      - name: dashboard-json
+        configMap:
+          name: grafana-dashboards-json
       - name: storage
         emptyDir: {}
 

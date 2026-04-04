@@ -1,0 +1,267 @@
+---
+# NATS JetStream for Threat Intelligence Queue System
+# High-performance, cloud-native message broker
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nats-system
+  labels:
+    name: nats-system
+
+---
+# ConfigMap for NATS Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: nats-system
+data:
+  nats.conf: |
+    # NATS Server Configuration
+    port: 4222
+    http_port: 8222
+
+    # Server name
+    server_name: $POD_NAME
+
+    # JetStream Configuration
+    jetstream {
+      store_dir: /data/jetstream
+
+      # Max memory for JetStream (per pod)
+      max_memory_store: 1Gi
+
+      # Max file storage for JetStream
+      max_file_store: 10Gi
+    }
+
+    # Single Node Mode (No Clustering for POC stability)
+
+    # Monitoring
+    server_tags: [
+      "service:threat-intelligence"
+      "environment:poc"
+    ]
+
+---
+# NATS StatefulSet (Clustered)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: nats-system
+  labels:
+    app: nats
+spec:
+  serviceName: nats
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats
+  template:
+    metadata:
+      labels:
+        app: nats
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7777"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Anti-affinity to spread across nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - nats
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: nats
+        image: nats:2.10-alpine
+        ports:
+        - containerPort: 4222
+          name: client
+        - containerPort: 8222
+          name: monitor
+
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+
+        command:
+        - nats-server
+        - --config
+        - /etc/nats-config/nats.conf
+
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/nats-config
+        - name: data
+          mountPath: /data/jetstream
+
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8222
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8222
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+        # Graceful shutdown
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - nats-server --signal quit
+
+      # NATS Prometheus Exporter sidecar
+      - name: metrics
+        image: natsio/prometheus-nats-exporter:0.14.0
+        args:
+        - -connz
+        - -routez
+        - -subz
+        - -varz
+        - -jsz=all
+        - http://localhost:8222/
+        ports:
+        - containerPort: 7777
+          name: metrics
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+
+      volumes:
+      - name: config-volume
+        configMap:
+          name: nats-config
+
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 10Gi
+
+---
+# NATS Headless Service (for StatefulSet)
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: nats-system
+  labels:
+    app: nats
+spec:
+  clusterIP: None
+  selector:
+    app: nats
+  ports:
+  - name: client
+    port: 4222
+    targetPort: 4222
+  - name: monitor
+    port: 8222
+    targetPort: 8222
+  - name: metrics
+    port: 7777
+    targetPort: 7777
+
+---
+# NATS Client Service (for applications)
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats-client
+  namespace: nats-system
+  labels:
+    app: nats
+spec:
+  type: ClusterIP
+  selector:
+    app: nats
+  ports:
+  - name: client
+    port: 4222
+    targetPort: 4222
+
+---
+# JetStream Stream Configuration (CRD-style via Job)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nats-stream-setup
+  namespace: nats-system
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: nats-setup
+        image: natsio/nats-box:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Wait for NATS to be ready
+          sleep 10
+
+          # Create JetStream stream for threat indicators
+          nats -s nats://nats-client:4222 stream add THREAT_INDICATORS \
+            --subjects "threat.indicators.>" \
+            --storage file \
+            --retention limits \
+            --max-msgs=-1 \
+            --max-bytes=10GB \
+            --max-age=24h \
+            --max-msg-size=1MB \
+            --replicas 1 \
+            --discard old \
+            --dupe-window 2m \
+            --defaults || echo "Stream may already exist"
+
+          # Create consumer groups for processing
+          nats -s nats://nats-client:4222 consumer add THREAT_INDICATORS processor-group \
+            --pull \
+            --deliver all \
+            --ack explicit \
+            --replay instant \
+            --defaults || echo "Consumer may already exist"
+
+          echo "NATS JetStream setup complete!"
+

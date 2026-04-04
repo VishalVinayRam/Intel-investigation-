@@ -1,11 +1,16 @@
-redis==5.0.1
-requests==2.32.4
-prometheus-client==0.19.0
+# Core processing and storage
+redis==5.0.3
+requests==2.32.3
+prometheus-client==0.20.0
 flask==3.1.3
-urllib3==2.6.3
-certifi==2024.7.4
+urllib3>=2.0.0
+certifi==2024.8.30
+
+# NATS JetStream for message queue
+nats-py==2.9.0
 
 # OpenTelemetry for LGTM Stack (Tempo tracing)
+setuptools>=80.1.0
 opentelemetry-api==1.28.2
 opentelemetry-sdk==1.28.2
 opentelemetry-exporter-otlp-proto-grpc==1.28.2

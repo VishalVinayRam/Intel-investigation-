@@ -1,0 +1,135 @@
+---
+# Threat Intelligence Fetcher (Producer) Deployment
+# Fetches threat feeds and publishes to NATS JetStream
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: intel-fetcher
+  namespace: intel-ingestion
+  labels:
+    app: intel-fetcher
+    component: producer
+    tier: data-ingestion
+spec:
+  replicas: 1  # Single fetcher instance (stateless, idempotent)
+  selector:
+    matchLabels:
+      app: intel-fetcher
+  template:
+    metadata:
+      labels:
+        app: intel-fetcher
+        component: producer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: intel-worker-sa
+
+      # Security context for pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+      - name: fetcher
+        image: intel-fetcher:latest
+        imagePullPolicy: IfNotPresent
+
+        # Security context for container
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+
+        ports:
+        - name: metrics
+          containerPort: 8001
+          protocol: TCP
+
+        env:
+        - name: NATS_URL
+          value: "nats://nats-client.nats-system:4222"
+        - name: FETCH_INTERVAL
+          value: "300"  # 5 minutes
+        - name: METRICS_PORT
+          value: "8001"
+        - name: TEMPO_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: worker-config
+              key: TEMPO_ENDPOINT
+              optional: true
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: worker-config
+              key: ENVIRONMENT
+              optional: true
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+        # Volume mounts for read-only filesystem
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+      volumes:
+      - name: tmp
+        emptyDir: {}
+
+      # Restart policy
+      restartPolicy: Always
+
+---
+# Service for Fetcher metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: intel-fetcher
+  namespace: intel-ingestion
+  labels:
+    app: intel-fetcher
+    component: producer
+spec:
+  type: ClusterIP
+  selector:
+    app: intel-fetcher
+  ports:
+  - name: metrics
+    port: 8001
+    targetPort: 8001
+    protocol: TCP
+

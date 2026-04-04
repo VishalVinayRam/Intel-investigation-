@@ -1,0 +1,59 @@
+# Multi-stage Dockerfile for Threat Intelligence Fetcher (Producer)
+# Implements secure containerization best practices
+
+# Stage 1: Builder
+FROM python:3.11-slim-bookworm AS builder
+
+WORKDIR /build
+
+# Copy requirements
+COPY app/requirements.txt .
+
+# Create virtual environment and install dependencies
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip "setuptools>=80.1.0" "wheel>=0.46.2" && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+
+# Stage 2: Runtime
+# Stage 2: Runtime
+FROM python:3.11-slim-bookworm
+
+# Install security updates and upgrade system-provided build tools
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    pip install --no-cache-dir --upgrade pip "setuptools>=80.1.0" "wheel>=0.46.2" && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r appuser && \
+    useradd -r -g appuser -u 1000 -m -s /sbin/nologin appuser
+
+# Set working directory
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+
+# Copy application code
+COPY app/fetcher.py .
+
+# Set ownership
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Set Python path to use virtual environment
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8001/health', timeout=5)"
+
+# Expose metrics port
+EXPOSE 8001
+
+# Run the fetcher
+CMD ["python", "fetcher.py"]
