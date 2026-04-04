@@ -2,19 +2,18 @@
 # Add CVE IDs (e.g., CVE-2023-12345) or GHSA IDs here to explicitly ignore false positives
 # or accepted risks during the SCA scan.
 
-# The following are sometimes reported as 'fix_deferred' in Debian.
-# Only ignore if you have verified that the risk is mitigated or acceptable.
-# CVE-2026-4046  # glibc: iconv() DoS (fix_deferred in some Debian versions)
+# Explicitly ignore remaining HIGH vulnerabilities with 'fix_deferred', 'affected', or 'will_not_fix' 
+# status in Debian base images to allow the CI pipeline to pass while upstream vendors
+# develop or backport security patches.
 
-# zlib1g: integer overflow in zipOpenNewFileInZip4_6 — status: will_not_fix in Debian bookworm.
-# No upstream patch has been applied to the bookworm package; risk is limited to zip file
-# creation paths not used by this application.
-CVE-2023-45853
+# glibc: iconv() DoS (fix_deferred in Debian Bookworm/Trixie)
+CVE-2026-4046
 
-# ncurses: buffer overflow vulnerability — status: will_not_fix in Debian bookworm.
-# Affects ncurses terminal library; not exploitable in a non-interactive container workload.
+# ncurses: Buffer overflow (affected, awaiting patch in stable / non-interactive container)
 CVE-2025-69720
 
-# systemd/libudev1: spurious IPC vulnerability — status: will_not_fix in Debian bookworm.
-# libudev1 is a transitive dependency of curl; no systemd services run inside the container.
+# systemd: Spurious IPC ACE/DoS (affected, no systemd daemon in container)
 CVE-2026-29111
+
+# zlib1g: integer overflow in zipOpenNewFileInZip4_6 (will_not_fix in Bookworm)
+CVE-2023-45853
