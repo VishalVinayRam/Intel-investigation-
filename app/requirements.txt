@@ -1,3 +1,6 @@
+# STIX 2.1 normalization
+stix2==3.0.1
+
 # Core processing and storage
 redis==5.0.3
 requests==2.32.3

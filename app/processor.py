@@ -9,9 +9,11 @@ import time
 import logging
 import json
 import redis
+import stix2
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import nats
+from stix_normalizer import extract_indicator
 from nats.errors import TimeoutError as NATSTimeoutError
 from nats.js.errors import NotFoundError
 from prometheus_client import Counter, Histogram, Gauge, start_http_server
@@ -30,13 +32,21 @@ class JSONFormatter(logging.Formatter):
             'level': record.levelname,
             'logger': record.name,
             'message': record.getMessage(),
-            'module': getattr(record, 'module', None),
-            'function': getattr(record, 'funcName', None),
-            'line': getattr(record, 'lineno', None)
+            'module': record.module,
+            'function': record.funcName,
+            'line': record.lineno
         }
-        # Add extra fields if present
-        if hasattr(record, 'extra'):
-            log_data.update(record.extra)
+        # Add all extra fields from the record __dict__
+        standard_attrs = {
+            'args', 'asctime', 'created', 'exc_info', 'exc_text', 'filename', 
+            'funcName', 'levelname', 'levelno', 'lineno', 'module', 'msecs', 
+            'message', 'msg', 'name', 'pathname', 'process', 'processName', 
+            'relativeCreated', 'stack_info', 'thread', 'threadName', 'timestamp'
+        }
+        for key, value in record.__dict__.items():
+            if key not in standard_attrs:
+                log_data[key] = value
+                
         return json.dumps(log_data)
 
 # Configure logger
@@ -238,93 +248,101 @@ class ThreatIndicatorProcessor:
                     return False
         return False
 
-    def process_indicator(self, indicator: Dict[str, Any]) -> bool:
+    def process_stix_bundle(self, raw_payload: bytes) -> bool:
         """
-        Process a single threat indicator
-        Returns True if successfully processed, False otherwise
+        Deserialize a STIX 2.1 Bundle from the NATS message payload,
+        validate it, and store each object in Redis.
+
+        Redis key schema:
+            stix:bundle:<bundle_id>      → full serialized Bundle JSON (TTL 24h)
+            stix:indicator:<indicator_id> → serialized Indicator SDO (TTL 24h)
+
+        Using the STIX object ID as the Redis key means the same indicator
+        from the same feed always overwrites the same slot — natural dedup
+        without a separate lookup table.
+
+        Returns True on success, False on any error (triggers NATS NAK).
         """
-        source = indicator.get('source', 'unknown')
-        indicator_type = indicator.get('type', 'unknown')
-
-        with tracer.start_as_current_span("process_indicator") as span:
-            span.set_attribute("indicator.source", source)
-            span.set_attribute("indicator.type", indicator_type)
-
+        with tracer.start_as_current_span("process_stix_bundle") as span:
             start_time = time.time()
+            source = "unknown"
 
             try:
-                # Extract key fields based on type
-                if indicator_type == 'malicious_url':
-                    key = f"threat:url:{indicator.get('url', 'unknown')}"
-                    value = json.dumps({
-                        'id': indicator.get('id'),
-                        'url': indicator.get('url'),
-                        'threat': indicator.get('threat'),
-                        'tags': indicator.get('tags'),
-                        'source': source,
-                        'timestamp': indicator.get('timestamp'),
-                        'type': indicator_type
-                    })
+                # --- Deserialize ---
+                bundle = stix2.parse(raw_payload.decode(), allow_custom=True)
 
-                elif indicator_type == 'malicious_host':
-                    key = f"threat:host:{indicator.get('domain', 'unknown')}"
-                    value = json.dumps({
-                        'ip': indicator.get('ip'),
-                        'domain': indicator.get('domain'),
-                        'source': source,
-                        'timestamp': indicator.get('timestamp'),
-                        'type': indicator_type
-                    })
+                if not isinstance(bundle, stix2.Bundle):
+                    logger.warning("Received non-Bundle STIX object — discarding")
+                    return False
 
-                else:
-                    # Generic indicator
-                    key = f"threat:generic:{source}:{indicator.get('id', hash(str(indicator)))}"
-                    value = json.dumps(indicator)
+                span.set_attribute("stix.bundle_id", bundle.id)
 
-                # Store in Redis with 24h TTL
+                # --- Extract the Indicator SDO for metrics and keying ---
+                indicator_obj = extract_indicator(bundle)
+                if not indicator_obj:
+                    logger.warning("Bundle contains no Indicator SDO — discarding",
+                                   extra={"bundle_id": bundle.id})
+                    return False
+
+                source = indicator_obj.get("x_feed_source", "unknown")
+                itype  = (indicator_obj.indicator_types or ["unknown"])[0]
+
+                span.set_attribute("indicator.id",     indicator_obj.id)
+                span.set_attribute("indicator.source", source)
+                span.set_attribute("indicator.type",   itype)
+
+                # --- Store in Redis ---
+                bundle_json    = bundle.serialize(pretty=False)
+                indicator_json = indicator_obj.serialize(pretty=False)
+
                 with tracer.start_as_current_span("redis_store"):
-                    self.redis_client.setex(
-                        key,
-                        86400,  # 24 hours
-                        value
-                    )
+                    pipe = self.redis_client.pipeline()
+                    pipe.setex(f"stix:bundle:{bundle.id}",         86400, bundle_json)
+                    pipe.setex(f"stix:indicator:{indicator_obj.id}", 86400, indicator_json)
+                    pipe.execute()
 
                 redis_storage_operations.labels(operation='set', status='success').inc()
 
-                # Update metrics
                 duration = time.time() - start_time
-                processing_duration.labels(source=source, type=indicator_type).observe(duration)
-                indicators_processed.labels(source=source, type=indicator_type).inc()
+                processing_duration.labels(source=source, type=itype).observe(duration)
+                indicators_processed.labels(source=source, type=itype).inc()
 
                 span.set_attribute("processing.duration_ms", duration * 1000)
-                span.set_attribute("redis.key", key)
 
-                logger.debug("Indicator processed successfully", extra={
-                    'source': source,
-                    'type': indicator_type,
-                    'duration_ms': duration * 1000
+                logger.info("STIX bundle stored", extra={
+                    "bundle_id":    bundle.id,
+                    "indicator_id": indicator_obj.id,
+                    "source":       source,
+                    "type":         itype,
+                    "duration_ms":  round(duration * 1000, 2),
                 })
-
                 return True
+
+            except stix2.exceptions.STIXError as e:
+                # Malformed STIX — no point retrying, terminate the message
+                indicators_failed.labels(source=source, error_type='stix_parse_error').inc()
+                logger.error("Invalid STIX payload", extra={"error": str(e)})
+                span.record_exception(e)
+                return False
+
+            except redis.exceptions.AuthenticationError:
+                # Password has rotated — trigger immediate reload, then NAK for retry
+                indicators_failed.labels(source=source, error_type='redis_auth_error').inc()
+                logger.warning("Redis auth failed — triggering key rotation check")
+                redis_storage_operations.labels(operation='set', status='failed').inc()
+                span.record_exception(Exception("Redis auth error"))
+                return False
 
             except redis.RedisError as e:
                 redis_storage_operations.labels(operation='set', status='failed').inc()
                 indicators_failed.labels(source=source, error_type='redis_error').inc()
-                logger.error("Redis storage error", extra={
-                    'source': source,
-                    'type': indicator_type,
-                    'error': str(e)
-                })
+                logger.error("Redis storage error", extra={"error": str(e)})
                 span.record_exception(e)
                 return False
 
             except Exception as e:
                 indicators_failed.labels(source=source, error_type='processing_error').inc()
-                logger.error("Indicator processing error", extra={
-                    'source': source,
-                    'type': indicator_type,
-                    'error': str(e)
-                })
+                logger.error("Bundle processing error", extra={"error": str(e)})
                 span.record_exception(e)
                 return False
 
@@ -367,34 +385,31 @@ class ThreatIndicatorProcessor:
                         for msg in messages:
                             with tracer.start_as_current_span("process_message") as msg_span:
                                 try:
-                                    # Parse indicator
-                                    indicator = json.loads(msg.data.decode())
-
-                                    source = indicator.get('source', 'unknown')
-                                    indicator_type = indicator.get('type', 'unknown')
+                                    # Consume source label from NATS header when available
+                                    source = (msg.headers or {}).get('Source', 'unknown')
+                                    itype  = (msg.headers or {}).get('Stix-Type', 'unknown')
 
                                     msg_span.set_attribute("message.subject", msg.subject)
                                     msg_span.set_attribute("indicator.source", source)
-                                    msg_span.set_attribute("indicator.type", indicator_type)
+                                    msg_span.set_attribute("indicator.type",   itype)
 
-                                    indicators_consumed.labels(source=source, type=indicator_type).inc()
+                                    indicators_consumed.labels(source=source, type=itype).inc()
 
-                                    # Process the indicator
-                                    success = self.process_indicator(indicator)
+                                    # Process the STIX bundle payload
+                                    success = self.process_stix_bundle(msg.data)
 
                                     if success:
-                                        # Acknowledge successful processing
                                         await msg.ack()
-                                        logger.debug("Message acknowledged", extra={
+                                        logger.debug("STIX bundle acknowledged", extra={
                                             'subject': msg.subject,
-                                            'source': source
+                                            'source':  source,
                                         })
                                     else:
-                                        # Negative acknowledgment - will be redelivered
+                                        # NAK — JetStream will redeliver after backoff
                                         await msg.nak()
-                                        logger.warning("Message processing failed, will retry", extra={
+                                        logger.warning("Bundle processing failed, will retry", extra={
                                             'subject': msg.subject,
-                                            'source': source
+                                            'source':  source,
                                         })
 
                                 except json.JSONDecodeError as e:
@@ -402,7 +417,7 @@ class ThreatIndicatorProcessor:
                                     logger.error("Failed to decode message", extra={
                                         'error': str(e)
                                     })
-                                    # Terminate the message - malformed, no point retrying
+                                    # Terminate — malformed bytes, retrying will not help
                                     await msg.term()
 
                                 except Exception as e:

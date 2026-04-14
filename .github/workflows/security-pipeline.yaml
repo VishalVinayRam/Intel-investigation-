@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: intel-worker
+  IMAGE_NAME: ghcr.io/vishalvinayram/intel-worker
   REGISTRY: ghcr.io
   NAMESPACE: intel-ingestion
 
@@ -136,13 +136,21 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Build Docker image
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push Docker image to GHCR
       uses: docker/build-push-action@v5
       with:
         context: .
-        push: false
-        tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
-        load: true
+        push: true
+        tags: |
+          ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          ${{ env.IMAGE_NAME }}:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
@@ -163,7 +171,7 @@ jobs:
         image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
         format: 'table'
         severity: 'CRITICAL,HIGH'
-        exit-code: '0'  # Reporting only, do not fail build
+        exit-code: '0'
         trivyignores: '.trivyignore'
 
     - name: Upload Trivy image results
@@ -171,17 +179,6 @@ jobs:
       if: always() && hashFiles('trivy-image-results.sarif') != ''
       with:
         sarif_file: 'trivy-image-results.sarif'
-
-    - name: Save Docker image
-      run: |
-        docker save ${{ env.IMAGE_NAME }}:${{ github.sha }} -o intel-worker-image.tar
-
-    - name: Upload Docker image artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: docker-image
-        path: intel-worker-image.tar
-        retention-days: 1
 
   # Job 4: Image Signing (Sigstore/Cosign)
   sign-image:
@@ -197,40 +194,17 @@ jobs:
     - name: Install Cosign
       uses: sigstore/cosign-installer@v3
 
-    - name: Download Docker image
-      uses: actions/download-artifact@v4
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
       with:
-        name: docker-image
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Load Docker image
+    - name: Sign image with Cosign (Keyless via GitHub OIDC)
       run: |
-        docker load -i intel-worker-image.tar
-
-    - name: Sign image with Cosign (Keyless)
-      run: |
-        echo "=== Image Signing Strategy ==="
-        echo "For production, we would sign the image using Sigstore/Cosign:"
-        echo ""
-        echo "1. Keyless signing (recommended for CI/CD):"
-        echo "   cosign sign --yes \$IMAGE_URI"
-        echo ""
-        echo "2. Key-based signing:"
-        echo "   cosign sign --key cosign.key \$IMAGE_URI"
-        echo ""
-        echo "3. Verification in K8s:"
-        echo "   - Use admission controller (e.g., Kyverno, OPA Gatekeeper)"
-        echo "   - Verify signature before allowing pod creation"
-        echo "   - Policy: only allow images signed by trusted identity"
-        echo ""
-        echo "Example verification:"
-        echo "   cosign verify --certificate-identity-regexp='.*@example\\.com' \\"
-        echo "     --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \\"
-        echo "     \$IMAGE_URI"
-        echo ""
-        echo "For this POC, image signing is demonstrated conceptually."
-        echo "In production, uncomment the actual signing command below:"
-        echo ""
-        echo "# cosign sign --yes ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        cosign sign --yes \
+          ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
   # Job 5: Deploy to Staging
   deploy-staging:
@@ -240,58 +214,60 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment:
       name: staging
-      url: http://intel-worker.intel-ingestion.svc.cluster.local:8000/metrics
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Download Docker image
-      uses: actions/download-artifact@v4
-      with:
-        name: docker-image
-
-    - name: Load Docker image
-      run: |
-        docker load -i intel-worker-image.tar
-        docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
-
     - name: Set up kubectl
       uses: azure/setup-kubectl@v4
 
-    - name: Deploy to Kubernetes (Staging)
+    - name: Configure kubeconfig
       run: |
-        echo "=== Deployment Strategy for Staging ==="
-        echo ""
-        echo "In a real environment, this would:"
-        echo "1. Configure kubectl to connect to staging cluster"
-        echo "2. Apply Terraform infrastructure (if not already deployed)"
-        echo "3. Update image tag in K8s deployment"
-        echo "4. Apply Kubernetes manifests"
-        echo "5. Wait for rollout to complete"
-        echo "6. Run smoke tests"
-        echo ""
-        echo "Example commands:"
-        echo "  kubectl config use-context staging"
-        echo "  kubectl set image deployment/intel-worker \\"
-        echo "    worker=${{ env.IMAGE_NAME }}:${{ github.sha }} \\"
-        echo "    -n ${{ env.NAMESPACE }}"
-        echo "  kubectl rollout status deployment/intel-worker -n ${{ env.NAMESPACE }}"
-        echo ""
-        echo "For local minikube deployment, run:"
-        echo "  minikube start"
-        echo "  eval \$(minikube docker-env)"
-        echo "  docker build -t intel-worker:latest ."
-        echo "  cd terraform && terraform apply -auto-approve"
-        echo "  kubectl apply -f k8s/"
+        mkdir -p $HOME/.kube
+        echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+        chmod 600 $HOME/.kube/config
+
+    - name: Deploy intel-worker to staging
+      run: |
+        kubectl set image deployment/intel-worker \
+          worker=${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          -n ${{ env.NAMESPACE }}
+
+        kubectl set image deployment/intel-fetcher \
+          fetcher=${{ env.IMAGE_NAME }}-fetcher:${{ github.sha }} \
+          -n ${{ env.NAMESPACE }}
+
+        kubectl set image deployment/intel-processor \
+          processor=${{ env.IMAGE_NAME }}-processor:${{ github.sha }} \
+          -n ${{ env.NAMESPACE }}
+
+    - name: Wait for rollout to complete
+      run: |
+        kubectl rollout status deployment/intel-worker \
+          -n ${{ env.NAMESPACE }} --timeout=300s
+
+        kubectl rollout status deployment/intel-fetcher \
+          -n ${{ env.NAMESPACE }} --timeout=300s
+
+        kubectl rollout status deployment/intel-processor \
+          -n ${{ env.NAMESPACE }} --timeout=300s
 
     - name: Verify deployment health
       run: |
-        echo "Health check would verify:"
-        echo "  - Pod is running"
-        echo "  - Metrics endpoint is accessible"
-        echo "  - No errors in logs"
-        echo "  - Threat feeds are being fetched"
+        echo "=== Pod Status ==="
+        kubectl get pods -n ${{ env.NAMESPACE }} -l app=intel-worker
+        kubectl get pods -n ${{ env.NAMESPACE }} -l app=intel-fetcher
+        kubectl get pods -n ${{ env.NAMESPACE }} -l app=intel-processor
+
+        echo "=== Checking metrics endpoints are live ==="
+        kubectl wait --for=condition=ready pod \
+          -l app=intel-processor \
+          -n ${{ env.NAMESPACE }} \
+          --timeout=120s
+
+        echo "=== Image deployed ==="
+        echo "  ghcr.io/vishalvinayram/intel-worker:${{ github.sha }}"
 
   # Job 6: Security Summary Report
   security-summary:

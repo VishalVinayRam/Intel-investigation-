@@ -19,6 +19,7 @@ import random
 import string
 import time
 import sys
+import uuid
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List
@@ -158,20 +159,20 @@ class Stats:
 
 # ─── Publisher ────────────────────────────────────────────────────────────────
 
-async def publish_batch(js, indicators: list, stats: Stats, semaphore: asyncio.Semaphore):
+async def publish_batch(js, items: list, stats: Stats, semaphore: asyncio.Semaphore):
     """Publish a batch of indicators, respecting concurrency limit."""
     tasks = []
-    for indicator in indicators:
-        tasks.append(publish_one(js, indicator, stats, semaphore))
+    for bundle, source, itype in items:
+        tasks.append(publish_one(js, bundle, source, itype, stats, semaphore))
     await asyncio.gather(*tasks)
 
 
-async def publish_one(js, indicator: dict, stats: Stats, semaphore: asyncio.Semaphore):
-    """Publish a single indicator to NATS JetStream."""
+async def publish_one(js, bundle: dict, source: str, itype: str, stats: Stats, semaphore: asyncio.Semaphore):
+    """Publish a single indicator bundle to NATS JetStream."""
     async with semaphore:
-        subject = f"threat.indicators.{indicator['source']}.{indicator.get('type', 'unknown')}"
-        payload = json.dumps(indicator).encode()
-        msg_id = f"{indicator['source']}-{indicator.get('id', hash(str(indicator)))}-{random.randint(0,999999)}"
+        subject = f"threat.indicators.{source}.{itype}"
+        payload = json.dumps(bundle).encode()
+        msg_id = f"{source}-{bundle['id']}-{random.randint(0,999999)}"
 
         t0 = time.perf_counter()
         try:
@@ -226,7 +227,30 @@ async def run(args):
     remaining = args.messages
     while remaining > 0:
         batch_count = min(args.batch_size, remaining)
-        batch = [make_indicator() for _ in range(batch_count)]
+        batch = []
+        for _ in range(batch_count):
+            indicator = make_indicator()
+            # Wrap in a minimal STIX 2.1 Bundle JSON
+            now_iso = indicator['timestamp'] + "Z"
+            stix_indicator = {
+                "type": "indicator",
+                "spec_version": "2.1",
+                "id": f"indicator--{uuid.uuid4()}",
+                "created": now_iso,
+                "modified": now_iso,
+                "indicator_types": ["malicious-activity"],
+                "pattern": f"[url:value = '{indicator['url']}']" if 'url' in indicator else f"[domain-name:value = '{indicator['domain']}']",
+                "pattern_type": "stix",
+                "valid_from": now_iso,
+                "x_feed_source": indicator['source']
+            }
+            bundle = {
+                "type": "bundle",
+                "id": f"bundle--{uuid.uuid4()}",
+                "objects": [stix_indicator]
+            }
+            batch.append((bundle, indicator['source'], indicator.get('type', 'unknown')))
+            
         await publish_batch(js, batch, stats, semaphore)
         remaining -= batch_count
         stats.print_progress()

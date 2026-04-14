@@ -36,6 +36,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 
 # Copy application code
+COPY app/stix_normalizer.py .
 COPY app/fetcher.py .
 
 # Set ownership

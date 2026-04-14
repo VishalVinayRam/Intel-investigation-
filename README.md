@@ -4,22 +4,21 @@ This is an enterprise-grade, high-throughput pipeline for ingesting, processing,
 
 ---
 
-## 🚀 The First 5 Minutes
-Get the entire cluster up and running with these simple commands:
+## 🚀 One-Command Management
+We've unified the lifecycle of this pipeline into a single script. Use **`manage.sh`** for everything:
 
 ```bash
-# 1. Spin up the Minikube cluster
-make minikube-start
+# 1. Start the entire application (Minikube + All Services)
+./manage.sh up
 
-# 2. Deploy the "Bunker" (NATS + Redis + Secrets + Kyverno)
-make deploy-nats
+# 2. Check the health status of all pods and NATS streams
+./manage.sh status
 
-# 3. Stress Test the Pipeline
-cd scripts/ && python load-test.py
+# 3. Open the Grafana Dashboard
+./manage.sh dashboard
 
-# 4. Open the "Single Pane of Glass"
-make grafana
-# Access at http://localhost:3000 (User: admin / Pass: admin)
+# 4. Stop everything (tears down services, keeps the cluster ready)
+./manage.sh down
 ```
 
 ---
