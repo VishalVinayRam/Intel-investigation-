@@ -1,0 +1,224 @@
+---
+# NetworkPolicy: Lock Redis ingress
+# Only the processor and worker pods may connect to Redis port 6379.
+# Everything else in the namespace is denied by the default-deny below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-ingress-policy
+  namespace: intel-ingestion
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchExpressions:
+        - key: app
+          operator: In
+          values:
+          - intel-processor
+          - intel-worker
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# NetworkPolicy: Fetcher egress
+# The fetcher produces to NATS and calls external threat feeds.
+# It has no reason to reach Redis directly — explicitly denied here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fetcher-network-policy
+  namespace: intel-ingestion
+spec:
+  podSelector:
+    matchLabels:
+      app: intel-fetcher
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  # DNS — must be allowed or all hostname resolution breaks
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+  # NATS client port — cross-namespace
+  # namespaceSelector + podSelector in the SAME 'to' entry = AND condition
+  # Two separate 'to' entries would be OR — do not split them
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: nats-system
+      podSelector:
+        matchLabels:
+          app: nats
+    ports:
+    - protocol: TCP
+      port: 4222
+
+  # External threat feeds (URLhaus, ThreatFox, etc.)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+
+  ingress:
+  # Prometheus metrics scraping from monitoring namespace only
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8001
+
+---
+# NetworkPolicy: Processor egress
+# The processor consumes from NATS and writes to Redis only.
+# No external internet access — if it needs external data, that is a design smell.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: processor-network-policy
+  namespace: intel-ingestion
+spec:
+  podSelector:
+    matchLabels:
+      app: intel-processor
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  # DNS
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+  # NATS client port — cross-namespace (AND condition, same 'to' entry)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: nats-system
+      podSelector:
+        matchLabels:
+          app: nats
+    ports:
+    - protocol: TCP
+      port: 4222
+
+  # Redis — same namespace, pod selector only
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+
+  # Tempo tracing — cross-namespace to monitoring
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 4317
+
+  ingress:
+  # Prometheus metrics scraping
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8002
+
+---
+# NetworkPolicy: NATS ingress (lives in nats-system namespace)
+# Only the fetcher (producer) and processor (consumer) in intel-ingestion
+# may connect to NATS port 4222.
+# Monitoring namespace may scrape the exporter on port 7777.
+# The management port 8222 is locked to the monitoring namespace only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nats-ingress-policy
+  namespace: nats-system
+spec:
+  podSelector:
+    matchLabels:
+      app: nats
+  policyTypes:
+  - Ingress
+  ingress:
+  # Client connections from intel-ingestion — fetcher and processor only
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: intel-ingestion
+      podSelector:
+        matchExpressions:
+        - key: app
+          operator: In
+          values:
+          - intel-fetcher
+          - intel-processor
+    ports:
+    - protocol: TCP
+      port: 4222
+
+  # Prometheus exporter sidecar metrics
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 7777
+
+  # NATS monitoring HTTP API — monitoring namespace only, not world-readable
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8222
+
+---
+# NetworkPolicy: Default deny-all for intel-ingestion namespace
+# Any pod not explicitly covered by a policy above cannot communicate.
+# This must be the last policy applied — it is the safety net.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: intel-ingestion
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress

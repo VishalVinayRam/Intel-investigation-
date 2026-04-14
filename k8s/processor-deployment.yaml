@@ -38,7 +38,7 @@ spec:
 
       containers:
       - name: processor
-        image: intel-processor:latest
+        image: docker.io/library/intel-processor:latest
         imagePullPolicy: IfNotPresent
 
         # Security context for container

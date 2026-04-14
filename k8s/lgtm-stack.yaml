@@ -8,6 +8,24 @@ metadata:
     name: monitoring
 
 ---
+# Placeholder alert rules ConfigMap for Loki (add PrometheusRule-style rules here later)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-alerts
+  namespace: monitoring
+data: {}
+
+---
+# Placeholder alert rules ConfigMap for Mimir (add recording/alerting rules here later)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mimir-alerts
+  namespace: monitoring
+data: {}
+
+---
 # Loki - Log Aggregation
 apiVersion: v1
 kind: ConfigMap
@@ -150,6 +168,7 @@ data:
           job: kubernetes-pods
           __path__: /var/log/pods/*/*/*.log
       pipeline_stages:
+      - cri: {}
       - match:
           selector: '{job="kubernetes-pods"}'
           stages:
@@ -368,10 +387,10 @@ spec:
         resources:
           requests:
             cpu: 100m
-            memory: 128Mi
+            memory: 256Mi
           limits:
             cpu: 500m
-            memory: 512Mi
+            memory: 1Gi
       volumes:
       - name: config
         configMap:
@@ -590,7 +609,8 @@ spec:
       serviceAccountName: prometheus
       containers:
       - name: prometheus
-        image: prom/prometheus:latest
+        image: prom/prometheus:v2.53.0
+        imagePullPolicy: IfNotPresent
         args:
         - --config.file=/etc/prometheus/prometheus.yml
         - --storage.tsdb.path=/prometheus
@@ -938,7 +958,8 @@ spec:
     spec:
       containers:
       - name: grafana
-        image: grafana/grafana:latest
+        image: grafana/grafana:11.1.0
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3000
           name: http

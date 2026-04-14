@@ -233,7 +233,8 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: nats-setup
-        image: natsio/nats-box:latest
+        image: natsio/nats-box:0.14.3
+        imagePullPolicy: IfNotPresent
         command:
         - /bin/sh
         - -c

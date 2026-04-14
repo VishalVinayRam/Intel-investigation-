@@ -33,11 +33,12 @@ build-nats: ## Build all NATS-based services (fetcher and processor)
 	docker build -f Dockerfile.processor -t intel-processor:$(IMAGE_TAG) .
 	@echo "Built intel-fetcher:$(IMAGE_TAG) and intel-processor:$(IMAGE_TAG)"
 
-build-nats-minikube: ## Build NATS services for minikube
-	eval $$(minikube docker-env) && \
-	docker build -f Dockerfile.fetcher -t intel-fetcher:$(IMAGE_TAG) . && \
+build-nats-minikube: ## Build NATS services for minikube (build locally, load into minikube)
+	docker build -f Dockerfile.fetcher -t intel-fetcher:$(IMAGE_TAG) .
 	docker build -f Dockerfile.processor -t intel-processor:$(IMAGE_TAG) .
-	@echo "Built NATS services in minikube Docker environment"
+	minikube image load intel-fetcher:$(IMAGE_TAG)
+	minikube image load intel-processor:$(IMAGE_TAG)
+	@echo "Built and loaded NATS services into minikube"
 
 push: build ## Push image to registry
 	docker tag $(IMAGE_NAME):$(IMAGE_TAG) $(DOCKER_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
@@ -142,12 +143,12 @@ kyverno-deploy: ## Deploy Kyverno Admission Controller and policies
 # LGTM Stack (Loki, Grafana, Tempo, Mimir)
 lgtm-deploy: ## Deploy LGTM observability stack
 	@echo "Deploying LGTM stack (Loki, Grafana, Tempo, Mimir)..."
-	kubectl apply -f k8s/lgtm-stack.yaml
+	minikube kubectl -- apply -f k8s/lgtm-stack.yaml
 	@echo "Waiting for LGTM components to be ready..."
-	kubectl wait --for=condition=ready pod -l app=grafana -n monitoring --timeout=300s || true
-	kubectl wait --for=condition=ready pod -l app=loki -n monitoring --timeout=300s || true
-	kubectl wait --for=condition=ready pod -l app=tempo -n monitoring --timeout=300s || true
-	kubectl wait --for=condition=ready pod -l app=mimir -n monitoring --timeout=300s || true
+	minikube kubectl -- wait --for=condition=ready pod -l app=grafana -n monitoring --timeout=300s || true
+	minikube kubectl -- wait --for=condition=ready pod -l app=loki -n monitoring --timeout=300s || true
+	minikube kubectl -- wait --for=condition=ready pod -l app=tempo -n monitoring --timeout=300s || true
+	minikube kubectl -- wait --for=condition=ready pod -l app=mimir -n monitoring --timeout=300s || true
 	@echo ""
 	@echo "LGTM Stack deployed!"
 	@echo "Access Grafana: kubectl port-forward -n monitoring svc/grafana 3000:3000"
@@ -155,10 +156,10 @@ lgtm-deploy: ## Deploy LGTM observability stack
 
 lgtm-status: ## Check LGTM stack status
 	@echo "=== LGTM Stack Status ==="
-	kubectl get all -n monitoring
+	minikube kubectl -- get all -n monitoring
 
 lgtm-delete: ## Delete LGTM stack
-	kubectl delete -f k8s/lgtm-stack.yaml
+	minikube kubectl -- delete -f k8s/lgtm-stack.yaml --ignore-not-found=true
 
 grafana: ## Port-forward to Grafana
 	@echo "Accessing Grafana at http://localhost:3000"
@@ -247,74 +248,74 @@ scan-all: scan-code scan-deps scan-image ## Run all security scans
 
 # Monitoring
 logs: ## Show worker logs
-	kubectl logs -f -n $(NAMESPACE) -l app=intel-worker
+	minikube kubectl -- logs -f -n $(NAMESPACE) -l app=intel-worker
 
 logs-fetcher: ## Show fetcher logs
-	kubectl logs -f -n $(NAMESPACE) -l app=intel-fetcher
+	minikube kubectl -- logs -f -n $(NAMESPACE) -l app=intel-fetcher
 
 logs-processor: ## Show processor logs
-	kubectl logs -f -n $(NAMESPACE) -l app=intel-processor
+	minikube kubectl -- logs -f -n $(NAMESPACE) -l app=intel-processor
 
 logs-all-nats: ## Show all NATS service logs
-	kubectl logs -f -n $(NAMESPACE) -l component=producer &
-	kubectl logs -f -n $(NAMESPACE) -l component=consumer
+	minikube kubectl -- logs -f -n $(NAMESPACE) -l component=producer &
+	minikube kubectl -- logs -f -n $(NAMESPACE) -l component=consumer
 
 metrics: ## Port-forward to metrics endpoint
 	@echo "Accessing metrics at http://localhost:8000/metrics"
-	kubectl port-forward -n $(NAMESPACE) svc/intel-worker 8000:8000
+	minikube kubectl -- port-forward -n $(NAMESPACE) svc/intel-worker 8000:8000
 
 metrics-fetcher: ## Port-forward to fetcher metrics
 	@echo "Accessing fetcher metrics at http://localhost:8001/metrics"
-	kubectl port-forward -n $(NAMESPACE) svc/intel-fetcher 8001:8001
+	minikube kubectl -- port-forward -n $(NAMESPACE) svc/intel-fetcher 8001:8001
 
 metrics-processor: ## Port-forward to processor metrics
 	@echo "Accessing processor metrics at http://localhost:8002/metrics"
-	kubectl port-forward -n $(NAMESPACE) svc/intel-processor 8002:8002
+	minikube kubectl -- port-forward -n $(NAMESPACE) svc/intel-processor 8002:8002
 
 nats-metrics: ## Port-forward to NATS metrics
 	@echo "Accessing NATS metrics at http://localhost:7777/metrics"
-	kubectl port-forward -n nats-system svc/nats 7777:7777
+	minikube kubectl -- port-forward -n nats-system svc/nats 7777:7777
 
 redis-cli: ## Connect to Redis CLI
-	kubectl exec -it -n $(NAMESPACE) deploy/redis -- redis-cli
+	minikube kubectl -- exec -it -n $(NAMESPACE) deploy/redis -- redis-cli
 
 nats-cli: ## Connect to NATS CLI (nats-box)
-	kubectl run -it --rm nats-box --image=natsio/nats-box:latest --restart=Never -- /bin/sh
+	minikube kubectl -- run -it --rm nats-box --image=natsio/nats-box:latest --restart=Never -- /bin/sh
 
 nats-status: ## Check NATS cluster status
 	@echo "=== NATS Namespace ==="
-	kubectl get namespace nats-system 2>/dev/null || echo "NATS namespace not found"
+	minikube kubectl -- get namespace nats-system 2>/dev/null || echo "NATS namespace not found"
 	@echo ""
 	@echo "=== NATS Pods ==="
-	kubectl get pods -n nats-system
+	minikube kubectl -- get pods -n nats-system
 	@echo ""
 	@echo "=== NATS Services ==="
-	kubectl get svc -n nats-system
+	minikube kubectl -- get svc -n nats-system
 	@echo ""
 	@echo "=== NATS StatefulSet ==="
-	kubectl get statefulset -n nats-system
+	minikube kubectl -- get statefulset -n nats-system
 	@echo ""
 	@echo "=== Stream Info ==="
 	@echo "Run: kubectl run -it --rm nats-box --image=natsio/nats-box:latest --restart=Never -- nats -s nats://nats-client.nats-system:4222 stream info THREAT_INDICATORS"
 
 status: ## Check deployment status
 	@echo "=== Namespace ==="
-	kubectl get namespace $(NAMESPACE) 2>/dev/null || echo "Namespace not found"
+	minikube kubectl -- get namespace $(NAMESPACE) 2>/dev/null || echo "Namespace not found"
 	@echo ""
 	@echo "=== Deployments ==="
-	kubectl get deployments -n $(NAMESPACE)
+	minikube kubectl -- get deployments -n $(NAMESPACE)
 	@echo ""
 	@echo "=== Pods ==="
-	kubectl get pods -n $(NAMESPACE)
+	minikube kubectl -- get pods -n $(NAMESPACE)
 	@echo ""
 	@echo "=== Services ==="
-	kubectl get services -n $(NAMESPACE)
+	minikube kubectl -- get services -n $(NAMESPACE)
 	@echo ""
 	@echo "=== HPA ==="
-	kubectl get hpa -n $(NAMESPACE)
+	minikube kubectl -- get hpa -n $(NAMESPACE)
 	@echo ""
 	@echo "=== NetworkPolicies ==="
-	kubectl get networkpolicies -n $(NAMESPACE)
+	minikube kubectl -- get networkpolicies -n $(NAMESPACE)
 
 # Cleanup
 clean: ## Clean local build artifacts

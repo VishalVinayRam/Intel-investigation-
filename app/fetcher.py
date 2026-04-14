@@ -5,13 +5,16 @@ Fetches threat indicators from external feeds and publishes to NATS JetStream
 """
 
 import os
+import re
 import time
 import logging
 import requests
 import json
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+import stix2
 import nats
+from stix_normalizer import normalize_urlhaus, normalize_threatfox, extract_indicator
 from nats.errors import TimeoutError as NATSTimeoutError
 from prometheus_client import Counter, Gauge, start_http_server
 from flask import Flask, Response
@@ -129,44 +132,52 @@ class ThreatFeedFetcher:
                     return False
         return False
 
-    def fetch_urlhaus_feed(self) -> List[Dict[str, Any]]:
+    def fetch_urlhaus_feed(self) -> List[stix2.Bundle]:
         """
-        Fetch malicious URLs from Abuse.ch URLhaus
-        Public feed - no API key required
+        Fetch malicious URLs from Abuse.ch URLhaus and normalize to STIX 2.1.
+        Returns a list of stix2.Bundle objects, one per valid indicator.
         """
         source = 'urlhaus'
         start_time = time.time()
 
         try:
-            url = 'https://urlhaus.abuse.ch/downloads/csv_recent/'
-            logger.info("Fetching threat feed", extra={'source': source, 'url': url})
+            feed_url = 'https://urlhaus.abuse.ch/downloads/csv_recent/'
+            logger.info("Fetching threat feed", extra={'source': source, 'url': feed_url})
 
-            response = requests.get(url, timeout=30)
+            response = requests.get(feed_url, timeout=30)
             response.raise_for_status()
 
-            # Parse CSV (skip comments)
-            indicators = []
-            lines = response.text.split('\n')
+            bundles = []
+            skipped = 0
 
-            for line in lines:
+            for line in response.text.split('\n'):
                 if line.startswith('#') or not line.strip():
                     continue
-
                 try:
-                    parts = line.split(',')
-                    if len(parts) >= 7:
-                        indicator = {
-                            'id': parts[0].strip('"'),
-                            'url': parts[2].strip('"'),
-                            'threat': parts[4].strip('"'),
-                            'tags': parts[5].strip('"'),
-                            'source': source,
-                            'timestamp': datetime.utcnow().isoformat(),
-                            'type': 'malicious_url'
-                        }
-                        indicators.append(indicator)
+                    # URLhaus CSV: id, dateadded, url, url_status, threat, tags, urlhaus_link
+                    import csv, io
+                    row = next(csv.reader(io.StringIO(line)))
+                    if len(row) < 7:
+                        skipped += 1
+                        continue
+
+                    raw = {
+                        'id':     row[0].strip(),
+                        'url':    row[2].strip(),
+                        'threat': row[4].strip(),
+                        'tags':   row[5].strip(),
+                        'source': source,
+                    }
+
+                    bundle = normalize_urlhaus(raw)
+                    if bundle:
+                        bundles.append(bundle)
+                    else:
+                        skipped += 1
+
                 except Exception as e:
-                    logger.debug(f"Skipping malformed line: {e}")
+                    logger.debug(f"Skipping malformed URLhaus line: {e}")
+                    skipped += 1
                     continue
 
             duration_ms = (time.time() - start_time) * 1000
@@ -175,61 +186,67 @@ class ThreatFeedFetcher:
 
             logger.info("Feed fetch successful", extra={
                 'source': source,
-                'count': len(indicators),
+                'bundles': len(bundles),
+                'skipped': skipped,
                 'duration_ms': duration_ms
             })
-            return indicators
+            return bundles
 
         except requests.RequestException as e:
             threat_feeds_fetched.labels(source=source, status='failed').inc()
             logger.error("Failed to fetch feed", extra={
-                'source': source,
-                'error_type': 'request_failed'
+                'source': source, 'error_type': 'request_failed'
             }, exc_info=True)
             return []
         except Exception as e:
             threat_feeds_fetched.labels(source=source, status='error').inc()
             logger.error("Unexpected error fetching feed", extra={
-                'source': source,
-                'error_type': 'parse_error'
+                'source': source, 'error_type': 'parse_error'
             }, exc_info=True)
             return []
 
-    def fetch_threatfox_feed(self) -> List[Dict[str, Any]]:
+    def fetch_threatfox_feed(self) -> List[stix2.Bundle]:
         """
-        Fetch IOCs from Abuse.ch ThreatFox
-        Public feed - no API key required
+        Fetch malicious hosts from Abuse.ch ThreatFox and normalize to STIX 2.1.
+        Returns a list of stix2.Bundle objects, one per valid indicator.
         """
         source = 'threatfox'
         start_time = time.time()
 
         try:
-            url = 'https://threatfox.abuse.ch/downloads/hostfile/'
-            logger.info("Fetching threat feed", extra={'source': source, 'url': url})
+            feed_url = 'https://threatfox.abuse.ch/downloads/hostfile/'
+            logger.info("Fetching threat feed", extra={'source': source, 'url': feed_url})
 
-            response = requests.get(url, timeout=30)
+            response = requests.get(feed_url, timeout=30)
             response.raise_for_status()
 
-            indicators = []
-            lines = response.text.split('\n')
+            bundles = []
+            skipped = 0
 
-            for line in lines:
+            for line in response.text.split('\n'):
                 if line.startswith('#') or not line.strip():
                     continue
-
                 try:
                     parts = line.split()
-                    if len(parts) >= 2:
-                        indicator = {
-                            'ip': parts[0],
-                            'domain': parts[1],
-                            'source': source,
-                            'timestamp': datetime.utcnow().isoformat(),
-                            'type': 'malicious_host'
-                        }
-                        indicators.append(indicator)
+                    if len(parts) < 2:
+                        skipped += 1
+                        continue
+
+                    raw = {
+                        'ip':     parts[0],
+                        'domain': parts[1],
+                        'source': source,
+                    }
+
+                    bundle = normalize_threatfox(raw)
+                    if bundle:
+                        bundles.append(bundle)
+                    else:
+                        skipped += 1
+
                 except Exception as e:
-                    logger.debug(f"Skipping malformed line: {e}")
+                    logger.debug(f"Skipping malformed ThreatFox line: {e}")
+                    skipped += 1
                     continue
 
             duration_ms = (time.time() - start_time) * 1000
@@ -238,77 +255,85 @@ class ThreatFeedFetcher:
 
             logger.info("Feed fetch successful", extra={
                 'source': source,
-                'count': len(indicators),
+                'bundles': len(bundles),
+                'skipped': skipped,
                 'duration_ms': duration_ms
             })
-            return indicators
+            return bundles
 
         except requests.RequestException as e:
             threat_feeds_fetched.labels(source=source, status='failed').inc()
             logger.error("Failed to fetch feed", extra={
-                'source': source,
-                'error_type': 'request_failed'
+                'source': source, 'error_type': 'request_failed'
             }, exc_info=True)
             return []
         except Exception as e:
             threat_feeds_fetched.labels(source=source, status='error').inc()
             logger.error("Unexpected error fetching feed", extra={
-                'source': source,
-                'error_type': 'parse_error'
+                'source': source, 'error_type': 'parse_error'
             }, exc_info=True)
             return []
 
-    async def publish_indicators(self, indicators: List[Dict[str, Any]]):
-        """Publish indicators to NATS JetStream"""
-        if not indicators:
+    async def publish_bundles(self, bundles: List[stix2.Bundle], source: str):
+        """
+        Publish STIX 2.1 Bundles to NATS JetStream.
+
+        Subject format: threat.indicators.<source>.<stix_indicator_type>
+        Message body:   JSON-serialized STIX Bundle (stix2 library output)
+        Dedup key:      indicator STIX ID — deterministic UUID5, same indicator
+                        from the same feed always maps to the same NATS-Msg-Id,
+                        so JetStream's duplicate window discards re-fetched data.
+        """
+        if not bundles:
             return
 
-        for indicator in indicators:
+        for bundle in bundles:
             try:
-                # Subject: threat.indicators.<source>.<type>
-                subject = f"threat.indicators.{indicator['source']}.{indicator.get('type', 'unknown')}"
+                indicator_obj = extract_indicator(bundle)
+                if not indicator_obj:
+                    continue
 
-                # Publish to JetStream with deduplication
-                payload = json.dumps(indicator).encode()
+                # Derive a safe subject segment from indicator_types
+                # e.g. ["malicious-activity"] → "malicious-activity"
+                itype = (indicator_obj.indicator_types or ["unknown"])[0]
+                safe_itype = re.sub(r'[^a-zA-Z0-9_-]', '-', itype)
+
+                subject = f"threat.indicators.{source}.{safe_itype}"
+
+                # stix2 library serializes to spec-compliant JSON
+                payload = bundle.serialize(pretty=False).encode()
 
                 ack = await self.js.publish(
                     subject,
                     payload,
                     headers={
-                        'Nats-Msg-Id': f"{indicator['source']}-{indicator.get('id', hash(str(indicator)))}",
-                        'Source': indicator['source'],
-                        'Type': indicator.get('type', 'unknown')
+                        # Deterministic ID → JetStream dedup window works correctly
+                        'Nats-Msg-Id': indicator_obj.id,
+                        'Source':      source,
+                        'Stix-Type':   safe_itype,
                     }
                 )
 
                 threat_indicators_published.labels(
-                    source=indicator['source'],
-                    type=indicator.get('type', 'unknown')
+                    source=source,
+                    type=safe_itype
                 ).inc()
 
-                logger.debug("Published indicator to NATS", extra={
-                    'source': indicator['source'],
-                    'subject': subject,
-                    'stream': ack.stream,
-                    'seq': ack.seq
+                logger.debug("Published STIX bundle to NATS", extra={
+                    'source':       source,
+                    'indicator_id': indicator_obj.id,
+                    'subject':      subject,
+                    'stream':       ack.stream,
+                    'seq':          ack.seq,
                 })
 
             except NATSTimeoutError:
-                nats_publish_errors.labels(
-                    source=indicator.get('source', 'unknown'),
-                    error_type='timeout'
-                ).inc()
-                logger.error("NATS publish timeout", extra={
-                    'source': indicator.get('source'),
-                })
+                nats_publish_errors.labels(source=source, error_type='timeout').inc()
+                logger.error("NATS publish timeout", extra={'source': source})
             except Exception as e:
-                nats_publish_errors.labels(
-                    source=indicator.get('source', 'unknown'),
-                    error_type='publish_failed'
-                ).inc()
-                logger.error("Failed to publish indicator to NATS", extra={
-                    'source': indicator.get('source'),
-                    'error': str(e)
+                nats_publish_errors.labels(source=source, error_type='publish_failed').inc()
+                logger.error("Failed to publish STIX bundle", extra={
+                    'source': source, 'error': str(e)
                 })
 
     async def run(self):
@@ -324,21 +349,15 @@ class ThreatFeedFetcher:
 
         while True:
             try:
-                # Fetch from multiple sources
-                all_indicators = []
+                # Fetch and publish per source so metrics stay source-labelled
+                urlhaus_bundles = self.fetch_urlhaus_feed()
+                await self.publish_bundles(urlhaus_bundles, source='urlhaus')
 
-                # URLhaus feed
-                urlhaus_indicators = self.fetch_urlhaus_feed()
-                all_indicators.extend(urlhaus_indicators)
+                threatfox_bundles = self.fetch_threatfox_feed()
+                await self.publish_bundles(threatfox_bundles, source='threatfox')
 
-                # ThreatFox feed
-                threatfox_indicators = self.fetch_threatfox_feed()
-                all_indicators.extend(threatfox_indicators)
-
-                # Publish to NATS JetStream
-                await self.publish_indicators(all_indicators)
-
-                logger.info(f"Published {len(all_indicators)} total indicators to NATS")
+                total = len(urlhaus_bundles) + len(threatfox_bundles)
+                logger.info(f"Published {total} STIX bundles to NATS")
 
             except Exception as e:
                 logger.error(f"Error in fetcher loop: {e}", exc_info=True)
