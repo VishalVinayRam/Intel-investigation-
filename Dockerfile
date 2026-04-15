@@ -21,8 +21,7 @@ FROM python:3.11-slim-bookworm
 # Security: Install mandatory security updates and upgrade system-level python tools
 RUN apt-get update && \
     apt-get upgrade -y && \
-    apt-get install -y --no-install-recommends curl && \
-    pip install --no-cache-dir --upgrade pip setuptools>=80.1.0 wheel>=0.46.2 && \
+    pip install --no-cache-dir --upgrade pip "setuptools>=80.1.0" "wheel>=0.46.2" && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

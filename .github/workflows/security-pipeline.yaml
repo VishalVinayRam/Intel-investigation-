@@ -265,55 +265,25 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up kubectl
-      uses: azure/setup-kubectl@v4
-
-    - name: Configure kubeconfig
+    - name: Simulate deployment to staging (no live cluster)
       run: |
-        mkdir -p $HOME/.kube
-        echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
-        chmod 600 $HOME/.kube/config
-
-    - name: Deploy intel-worker to staging
-      run: |
-        kubectl set image deployment/intel-worker \
-          worker=${{ env.IMAGE_NAME }}:${{ github.sha }} \
-          -n ${{ env.NAMESPACE }}
-
-        kubectl set image deployment/intel-fetcher \
-          fetcher=${{ env.IMAGE_NAME }}-fetcher:${{ github.sha }} \
-          -n ${{ env.NAMESPACE }}
-
-        kubectl set image deployment/intel-processor \
-          processor=${{ env.IMAGE_NAME }}-processor:${{ github.sha }} \
-          -n ${{ env.NAMESPACE }}
-
-    - name: Wait for rollout to complete
-      run: |
-        kubectl rollout status deployment/intel-worker \
-          -n ${{ env.NAMESPACE }} --timeout=300s
-
-        kubectl rollout status deployment/intel-fetcher \
-          -n ${{ env.NAMESPACE }} --timeout=300s
-
-        kubectl rollout status deployment/intel-processor \
-          -n ${{ env.NAMESPACE }} --timeout=300s
-
-    - name: Verify deployment health
-      run: |
-        echo "=== Pod Status ==="
-        kubectl get pods -n ${{ env.NAMESPACE }} -l app=intel-worker
-        kubectl get pods -n ${{ env.NAMESPACE }} -l app=intel-fetcher
-        kubectl get pods -n ${{ env.NAMESPACE }} -l app=intel-processor
-
-        echo "=== Checking metrics endpoints are live ==="
-        kubectl wait --for=condition=ready pod \
-          -l app=intel-processor \
-          -n ${{ env.NAMESPACE }} \
-          --timeout=120s
-
-        echo "=== Image deployed ==="
-        echo "  ghcr.io/vishalvinayram/intel-worker:${{ github.sha }}"
+        echo "================================================================"
+        echo "  STAGING DEPLOYMENT SIMULATION"
+        echo "  (kubectl skipped — no live cluster in this demo environment)"
+        echo "================================================================"
+        echo ""
+        echo "The following signed images are ready to deploy:"
+        echo "  ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        echo "  ${{ env.IMAGE_NAME }}-fetcher:${{ github.sha }}"
+        echo "  ${{ env.IMAGE_NAME }}-processor:${{ github.sha }}"
+        echo ""
+        echo "In a live environment these kubectl commands would run:"
+        echo "  kubectl set image deployment/intel-worker worker=<image> -n ${{ env.NAMESPACE }}"
+        echo "  kubectl set image deployment/intel-fetcher fetcher=<image> -n ${{ env.NAMESPACE }}"
+        echo "  kubectl set image deployment/intel-processor processor=<image> -n ${{ env.NAMESPACE }}"
+        echo "  kubectl rollout status deployment/intel-worker -n ${{ env.NAMESPACE }}"
+        echo ""
+        echo "All images were built, scanned, and signed successfully."
 
   # Job 6: Security Summary Report
   security-summary:
@@ -333,7 +303,7 @@ jobs:
         echo "### Scans Completed:" >> $GITHUB_STEP_SUMMARY
         echo "- ✅ SAST (Bandit)" >> $GITHUB_STEP_SUMMARY
         echo "- ✅ Secret Detection" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Dependency Scanning (Safety)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Dependency Scanning (pip-audit)" >> $GITHUB_STEP_SUMMARY
         echo "- ✅ SCA (Trivy)" >> $GITHUB_STEP_SUMMARY
         echo "- ✅ Container Image Scanning" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY

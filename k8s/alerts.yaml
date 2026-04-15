@@ -30,15 +30,15 @@ data:
     groups:
       - name: intel-worker-metrics
         rules:
-          - alert: ThreatFeedFailures
+          - alert: ThreatFeedDown
             expr: |
               rate(external_api_errors_count_total[5m]) > 0
-            for: 1m
+            for: 5m
             labels:
               severity: critical
             annotations:
-              summary: "Threat Feed API Failures"
-              description: "Worker is encountering errors while fetching threat feeds."
+              summary: "Threat Feed Source Down"
+              description: "A threat feed source has been returning errors continuously for 5 minutes — the feed may be offline."
           - alert: HighErrorRatio
             expr: |
               sum(rate(external_api_errors_count_total[5m])) / (sum(rate(threat_indicators_processed_total[5m])) + sum(rate(external_api_errors_count_total[5m]))) > 0.1
