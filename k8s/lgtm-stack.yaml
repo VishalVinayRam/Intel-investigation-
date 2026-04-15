@@ -7,23 +7,7 @@ metadata:
   labels:
     name: monitoring
 
----
-# Placeholder alert rules ConfigMap for Loki (add PrometheusRule-style rules here later)
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: loki-alerts
-  namespace: monitoring
-data: {}
-
----
-# Placeholder alert rules ConfigMap for Mimir (add recording/alerting rules here later)
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: mimir-alerts
-  namespace: monitoring
-data: {}
+# Alert rules ConfigMaps are defined in alerts.yaml — not duplicated here.
 
 ---
 # Loki - Log Aggregation

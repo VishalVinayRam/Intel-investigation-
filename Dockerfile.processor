@@ -23,5 +23,9 @@ RUN groupadd -r appuser && useradd -r -g appuser -u 1000 -m -s /sbin/nologin app
     chown -R appuser:appuser /app
 USER appuser
 ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8002/health', timeout=5)"
+
 EXPOSE 8002
 CMD ["python", "processor.py"]
