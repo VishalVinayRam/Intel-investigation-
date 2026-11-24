@@ -1,0 +1,113 @@
+---
+# Redis Deployment — task queue and indicator store
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: intel-ingestion
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999   # redis official image default UID
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+      - name: redis
+        image: redis:7.2-alpine
+        imagePullPolicy: IfNotPresent
+
+        # Load password from secret at startup
+        command:
+        - sh
+        - -c
+        - |
+          exec redis-server \
+            --requirepass "$(cat /etc/secrets/REDIS_PASSWORD)" \
+            --appendonly yes \
+            --appendfsync everysec
+
+        ports:
+        - containerPort: 6379
+          name: redis
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false   # Redis needs /data writes
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - redis-cli -a "$(cat /etc/secrets/REDIS_PASSWORD)" ping
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          timeoutSeconds: 5
+
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - redis-cli -a "$(cat /etc/secrets/REDIS_PASSWORD)" ping
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: secrets
+          mountPath: /etc/secrets
+          readOnly: true
+
+      volumes:
+      - name: data
+        emptyDir: {}   # Replace with PVC for production persistence
+      - name: secrets
+        secret:
+          secretName: threat-feed-secrets
+          defaultMode: 0444
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: intel-ingestion
+  labels:
+    app: redis
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+    protocol: TCP
